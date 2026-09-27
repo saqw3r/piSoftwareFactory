@@ -69,6 +69,18 @@ if _HAS_JEV:  # pragma: no cover — exercised only with the [jev] extra + API k
         (low|standard|high), size (small|medium|large). Abstain when unsure."""
 
 
+_LANG_BY_WORD = {
+    "python": "python",
+    "rust": "rust",
+    "golang": "go",
+    "go": "go",
+    "csharp": "csharp",
+    "typescript": "js",
+    "javascript": "js",
+    "cpp": "cpp",
+}
+
+
 def heuristic_intake(task: str, config: FactoryConfig) -> IntakeDecision:
     """Deterministic keyword/path classifier — the offline default."""
     kind = "feature"
@@ -82,11 +94,14 @@ def heuristic_intake(task: str, config: FactoryConfig) -> IntakeDecision:
     risk = "high" if _HIGH_RISK_WORDS.search(task) else "standard"
 
     language = ""
-    for token in re.findall(r"\w+", task):
-        ext = _EXT_HINTS.get(token.lower().rsplit(".", 1)[-1]) if "." in token else None
-        if ext:
-            language = ext
-            break
+    ext_match = re.search(r"\.([A-Za-z]{1,4})\b", task)  # file mentions: "main.rs"
+    if ext_match and ext_match.group(1).lower() in _EXT_HINTS:
+        language = _EXT_HINTS[ext_match.group(1).lower()]
+    else:
+        for word in re.findall(r"[a-z]+", task.lower()):
+            if word in _LANG_BY_WORD:
+                language = _LANG_BY_WORD[word]
+                break
     if not language and config.languages:
         language = config.languages[0]
 

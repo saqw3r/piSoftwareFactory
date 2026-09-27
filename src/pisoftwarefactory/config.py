@@ -75,8 +75,9 @@ class Gates(BaseModel):
     """Deterministic gate runner settings (ADR-0013)."""
 
     step_timeout_sec: int = Field(default=600, ge=10)
-    # Projects may append extra commands per language, e.g. [gates.extra] rust = [...]
-    extra: dict[str, list[str]] = Field(default_factory=dict)
+    # Projects may append extra steps per language. Each step is an argv
+    # array; TOML: [gates.extra] go = [["custom", "check", "--all"]]
+    extra: dict[str, list[list[str]]] = Field(default_factory=dict)
 
 
 class FactoryConfig(BaseModel):
