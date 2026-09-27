@@ -88,7 +88,30 @@ def gates(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
 ) -> None:
     """Run deterministic verification gates (ADR-0013)."""
-    _not_implemented("gates", "ADR-0013")
+    from rich.table import Table
+
+    from .config import load_config
+    from .gates import FAILED, run_gates
+
+    root = root.resolve()
+    config = load_config(root)
+    results = run_gates(root, config, only_lang=lang or None)
+
+    any_failed = False
+    for profile in results:
+        table = Table(title=f"gates: {profile.language}", title_justify="left")
+        table.add_column("step")
+        table.add_column("status")
+        table.add_column("detail", overflow="fold")
+        for step in profile.steps:
+            style = "green" if step.status == "passed" else ("yellow" if step.status.startswith("skipped:") else "red")
+            if step.status == FAILED:
+                any_failed = True
+            table.add_row(step.name, f"[{style}]{step.status}[/]", step.detail)
+        console.print(table)
+    verdict = "[red]BLOCKED[/] — fix and re-run" if any_failed else "[green]PASS[/]"
+    console.print(f"gate verdict: {verdict}")
+    raise typer.Exit(code=1 if any_failed else 0)
 
 
 @app.command()
