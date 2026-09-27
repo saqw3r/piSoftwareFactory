@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "piSoftwareFactory"
+version = "0.1.0"
+description = "Local-first AI software factory: one-liner bootstrap, deterministic gates, pi workers on your own llama.cpp"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Serhii Surnin" }]
+requires-python = ">=3.11"
+keywords = ["ai", "agents", "software-factory", "llama-cpp", "automation", "sdlc"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Build Tools",
+]
+dependencies = [
+  "typer>=0.12",
+  "rich>=13.7",
+  "pydantic>=2.7",
+  "tomli-w>=1.0",
+  "jinja2>=3.1",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# jev 0.3.0 declares requires-python >=3.14; the markers keep the extra
+# installable (and the whole lockfile resolvable) on 3.11-3.13, where the
+# heuristic intake fallback simply runs instead (ADR-0004).
+jev = [
+  "jev>=0.3; python_version>='3.14'",
+  "typesafe-sdk>=0.6; python_version>='3.14'",
+]
+hindsight = ["hindsight-client>=0.1"]
+
+# NOTE: [project.urls] is added when the owner creates the GitHub remote
+# (ADR-0003: remote creation is owner-intercepted; the URL is not guessed).
+
+[project.scripts]
+sfactory = "pisoftwarefactory.cli:app"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pisoftwarefactory"]
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
