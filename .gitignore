@@ -24,3 +24,6 @@ Thumbs.db
 # Factory runtime artifacts (regenerated per run; never commit session state)
 .factory/run/
 *.session.jsonl
+
+# ZCode session-local state
+.zcode/plans/
