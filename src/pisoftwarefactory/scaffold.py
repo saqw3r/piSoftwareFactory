@@ -9,6 +9,7 @@ importable.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -85,21 +86,6 @@ is missing to do the element correctly, stop and report rather than guess.
 
 {% for lang in languages %}- {{ lang }}
 {% endfor %}
-"""
-
-PI_MODELS_JSON = """\
-{
-  "providers": {
-    "llamacpp": {
-      "baseUrl": "{{ base_url }}",
-      "api": "openai-completions",
-      "apiKey": "none",
-      "models": [
-        { "id": "{{ model }}" }
-      ]
-    }
-  }
-}
 """
 
 PREFLIGHT_PY = '''#!/usr/bin/env python3
@@ -418,6 +404,27 @@ def _git(root: Path, *args: str) -> str:
     ).stdout
 
 
+def _ensure_baseline_commit(root: Path, log) -> None:
+    """Lane worktrees need a commit to branch from; a bare `git init` has none."""
+    head = subprocess.run(
+        ("git", "-C", str(root), "rev-parse", "--verify", "HEAD"), capture_output=True
+    )
+    if head.returncode == 0:
+        return
+    subprocess.run(("git", "-C", str(root), "add", "-A"), check=False)
+    env = {"GIT_EDITOR": "true", "GIT_AUTHOR_NAME": "sfactory", "GIT_AUTHOR_EMAIL": "sfactory@local",
+           "GIT_COMMITTER_NAME": "sfactory", "GIT_COMMITTER_EMAIL": "sfactory@local"}
+    proc = subprocess.run(
+        ("git", "-C", str(root), "commit", "-m", "chore: baseline before factory scaffold"),
+        capture_output=True, text=True, env=env,
+    )
+    if proc.returncode == 0:
+        log("  [green]created baseline commit[/] (lane worktrees branch from it)")
+    else:
+        log(f"  [yellow]could not create baseline commit[/] ({proc.stderr.strip()}); "
+            "lane worktrees need one — commit before dispatching")
+
+
 def _probe_backend(config: FactoryConfig, log) -> None:
     """Fill the real model id from the live llama.cpp server (ADR-0010)."""
     try:
@@ -431,6 +438,45 @@ def _probe_backend(config: FactoryConfig, log) -> None:
         log(f"  [green]probed[/] backend {config.backend.base_url} → model={config.backend.model} ctx={config.backend.context_window}")
     except Exception as exc:  # noqa: BLE001
         log(f"  [yellow]backend probe failed[/] ({exc}); keeping defaults")
+
+
+def _ensure_pi_provider(config: FactoryConfig, log) -> None:
+    """Register the llamacpp provider in pi's agent directory (ADR-0002).
+
+    pi loads ``models.json`` from ``<agent-dir>`` only (``~/.pi/agent`` by
+    default, ``PI_CODING_AGENT_DIR`` to override) — a project-local
+    ``.pi/models.json`` is ignored, so the provider must be merged there.
+    The original file is backed up once before the first modification.
+    """
+    agent_dir = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent"))
+    models_path = agent_dir / "models.json"
+    provider_block = {
+        "baseUrl": config.backend.base_url,
+        "api": "openai-completions",
+        "apiKey": "none",
+        "models": [{"id": config.backend.model}],
+    }
+    try:
+        existing = json.loads(models_path.read_text(encoding="utf-8")) if models_path.is_file() else None
+    except json.JSONDecodeError:
+        existing = None
+        log(f"  [yellow]{models_path} is not valid JSON; it will be replaced (backup kept)")
+
+    if existing and existing.get("providers", {}).get("llamacpp") == provider_block:
+        log(f"  [green]pi provider ok[/] llamacpp → {config.backend.base_url} ({models_path})")
+        return
+
+    if existing is None:
+        new_data: dict = {"providers": {"llamacpp": provider_block}}
+    else:
+        if not models_path.with_suffix(".json.bak").exists():
+            shutil.copy2(models_path, models_path.with_suffix(".json.bak"))
+        new_data = existing
+        new_data.setdefault("providers", {})["llamacpp"] = provider_block
+
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    models_path.write_text(json.dumps(new_data, indent=2) + "\n", encoding="utf-8")
+    log(f"  [green]pi provider registered[/] llamacpp → {config.backend.base_url} in {models_path}")
 
 
 def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
@@ -458,6 +504,7 @@ def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
         memory={"bank_id": root.name.lower().replace(" ", "-")},
     )
     _probe_backend(config, log)
+    _ensure_pi_provider(config, log)
 
     ctx = {
         "project_name": root.name,
@@ -476,7 +523,6 @@ def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
     save_config(config, root)
     log(f"  [green]wrote[/] {root / 'factory.toml'}")
     _write(root / "launch.graph.json", json.dumps({"version": 1, "nodes": []}, indent=2) + "\n", force, log)
-    _write(root / ".pi" / "models.json", Template(PI_MODELS_JSON).render(**ctx), force, log)
     _write(root / ".factory" / "gates" / "preflight.py", PREFLIGHT_PY, force, log)
     _write(root / ".factory" / "gates" / "interlock_check.py", INTERLOCK_PY, force, log)
     _write(root / ".factory" / "lanes" / "lane.py", LANE_PY, force, log)
@@ -511,11 +557,16 @@ def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
     _write(root / "paperclip.company.json", Template(PAPERCLIP_COMPANY_JSON).render(**ctx), force, log)
 
     gitignore = root / ".gitignore"
-    entry = ".factory/run/\n"
+    entries = ".factory/run/\n.factory/worktrees/\n"
     existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
-    if entry not in existing:
-        gitignore.write_text(existing + ("\n" if existing and not existing.endswith("\n") else "") + "# sfactory runtime evidence\n" + entry, encoding="utf-8")
-        log(f"  [green]wrote[/] {gitignore} (+ .factory/run/)")
+    missing = "".join(e for e in entries.splitlines(keepends=True) if e not in existing)
+    if missing:
+        gitignore.write_text(existing + ("\n" if existing and not existing.endswith("\n") else "") + "# sfactory runtime state\n" + missing, encoding="utf-8")
+        log(f"  [green]wrote[/] {gitignore} (+ .factory/run/, .factory/worktrees/)")
+
+    # Baseline commit AFTER scaffolding so the factory files themselves are
+    # committed (release refuses a dirty tree, and lane worktrees branch from it).
+    _ensure_baseline_commit(root, log)
 
     log("\n[bold]Factory scaffolded.[/]")
     log(f"  auto mode: {'[green]ON[/] — unattended waves; the only human gate is the release merge' if auto else '[yellow]off[/] (pass --auto for unattended waves)'}")
