@@ -1,7 +1,7 @@
 # ADR-0013: Polyglot gate profiles (C#, Python, JS, Rust, C++, Go)
 
-- **Status:** Proposed
-- **Date:** 2026-09-27
+- **Status:** Accepted
+- **Date:** 2026-09-27 (approved by owner same day, as written)
 - **Deciders:** Serhii Surnin (owner), ZCode (facilitator)
 - **Depends on:** ADR-0001 (polyglot requirement), ADR-0009 (Python-first gates)
 
@@ -12,7 +12,7 @@ success" (esf). The factory must build and test six ecosystems. Gates must
 be Windows-safe, incremental to run, and gracefully skip when a toolchain or
 subsystem is absent.
 
-## Decision (proposed)
+## Decision (accepted)
 
 Each language has a **gate profile**: ordered steps, each with
 `detect` (does it apply), `run` (command), and `fix_hint` (feedback given to

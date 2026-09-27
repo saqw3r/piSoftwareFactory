@@ -1,7 +1,7 @@
 # ADR-0014: Runtime dependencies and build tooling
 
-- **Status:** Proposed
-- **Date:** 2026-09-27
+- **Status:** Accepted
+- **Date:** 2026-09-27 (approved by owner same day, as written)
 - **Deciders:** Serhii Surnin (owner), ZCode (facilitator)
 - **Depends on:** ADR-0009 (Python ≥ 3.11, uv), ADR-0003 (uvx one-liner)
 
@@ -12,7 +12,7 @@ dependency set must be small, pure-Python where possible, and
 Windows-compatible. Heavy integrations should be optional extras, not hard
 requirements (the factory must run fully offline with the heuristic intake).
 
-## Decision (proposed)
+## Decision (accepted)
 
 1. **Core dependencies** (all pure-Python, Windows-safe, permissively
    licensed):

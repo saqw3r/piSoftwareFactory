@@ -1,7 +1,7 @@
 # ADR-0012: Scaffold file set written by `sfactory init`
 
-- **Status:** Proposed
-- **Date:** 2026-09-27
+- **Status:** Accepted
+- **Date:** 2026-09-27 (approved by owner same day, as written)
 - **Deciders:** Serhii Surnin (owner), ZCode (facilitator)
 - **Depends on:** ADR-0001 (concept), ADR-0002 (pi), ADR-0005 (hindsight), ADR-0007 (pipeline)
 
@@ -11,7 +11,7 @@
 a target project needs to run the factory, and nothing it doesn't (no
 opinionated rewrites of the project's own build system).
 
-## Decision (proposed)
+## Decision (accepted)
 
 `sfactory init` writes into the target project (detected languages activate
 matching gate profiles; all files below except `.pi/` are committed to the

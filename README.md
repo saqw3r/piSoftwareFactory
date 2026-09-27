@@ -3,7 +3,7 @@
 A local-first, self-hosted **AI software factory** you can bootstrap into any new
 project with a one-liner, and run in full auto mode on your own machine.
 
-- **Bootstrap**: `uvx --from git+https://github.com/<you>/sfactory sfactory init --auto`
+- **Bootstrap**: `uvx --from git+https://github.com/<you>/piSoftwareFactory sfactory init --auto`
 - **Primary language**: Python (the factory tooling itself; it builds projects in C#, Python, JS, Rust, C++, Go)
 - **Model backend**: your running llama.cpp server (e.g. Qwen 3.5, 65 536 ctx) — nothing leaves your machine
 - **Multi-agent management**: [Paperclip](https://github.com/paperclipai/paperclip) companies (Architect → Workers → Reviewer)

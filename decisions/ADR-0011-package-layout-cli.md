@@ -1,19 +1,30 @@
 # ADR-0011: Package name, repo layout, and CLI command set
 
-- **Status:** Proposed
-- **Date:** 2026-09-27
+- **Status:** Accepted
+- **Date:** 2026-09-27 (approved by owner same day)
 - **Deciders:** Serhii Surnin (owner), ZCode (facilitator)
 - **Depends on:** ADR-0003 (git one-liner), ADR-0009 (Python primary)
+- **Approval record:** ADR-0012/0013/0014 approved as written; for 0011 the
+  owner rejected the proposed name and chose **`piSoftwareFactory`** (PyPI
+  normalization: `pisoftwarefactory`, verified free 2026-09-27). The CLI
+  command remains `sfactory`.
 
 ## Context
 
 The package is the distributable unit of the one-liner and the pipeline
 engine. Name and layout should be settled before any code.
 
-## Decision (proposed)
+## Decision (accepted)
 
-1. **Package name: `sfactory`** (verified free on PyPI 2026-09-27, keeping
-   the `uvx sfactory init` future open per ADR-0003).
+1. **Package name: `piSoftwareFactory`** (owner's choice). PyPI
+   normalization makes it `pisoftwarefactory`; the importable Python module
+   is `pisoftwarefactory` (PEP 8 lowercase). The **console command is
+   `sfactory`**, so the one-liner reads:
+
+   ```
+   uvx --from git+https://github.com/<you>/piSoftwareFactory sfactory init --auto
+   ```
+   ("pi" also honors the worker-harness choice in ADR-0002.)
 2. **Repo layout** (src layout — import correctness enforced by packaging):
 
    ```
@@ -48,10 +59,11 @@ engine. Name and layout should be settled before any code.
 
 ## Alternatives considered
 
-- Name `factory` (collision-prone on PyPI), `softfactory`, `aifactory` —
-  less precise; `sfactory` is short, unique, and matches the domain.
-- Flat layout (`sfactory/` at repo root) — simpler, but invites accidental
-  imports from repo root and weakens packaging hygiene.
+- Name `sfactory` (the original proposal) — rejected by owner in favor of
+  `piSoftwareFactory`. Other candidates evaluated for availability:
+  `factorykit`, `osfactory`, `localfactory` (all free on PyPI).
+- Flat layout (`pisoftwarefactory/` at repo root) — simpler, but invites
+  accidental imports from repo root and weakens packaging hygiene.
 
 ## Consequences
 
