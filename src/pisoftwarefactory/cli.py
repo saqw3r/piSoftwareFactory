@@ -56,7 +56,9 @@ def init(
     force: bool = typer.Option(False, "--force", help="Overwrite existing scaffolded files."),
 ) -> None:
     """Scaffold the factory into a project (ADR-0012)."""
-    _not_implemented("init", "ADR-0012")
+    from .scaffold import run_init
+
+    run_init(target=target, auto=auto, langs=langs, force=force, log=console.print)
 
 
 @app.command()
