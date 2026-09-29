@@ -16,6 +16,128 @@ uvx --from git+https://github.com/<you>/piSoftwareFactory sfactory init --auto
 - **Memory**: [Hindsight](https://github.com/vectorize-io/hindsight) (retain / recall / reflect, per-repo banks, MCP endpoint)
 - **Intake decisions**: [Jev](https://pypi.org/project/jev/) typed, confidence-scored, abstaining (optional; deterministic heuristic fallback)
 
+## Getting started
+
+### 0. Prerequisites (once per machine)
+
+| Need | Install |
+|---|---|
+| uv + Python 3.11+ | `powershell -c "irm https://astral.sh/uv/install.ps1 \| iex"` |
+| git | winget/choco/your usual way |
+| Node.js ≥ 24.11 + pi harness | `npm install -g @earendil-works/pi-coding-agent` |
+| llama.cpp server | your own `llama-server` (e.g. `-m qwen3.5-9b.gguf --port 8080`); `sfactory init` probes it and fills in model + ctx |
+| optional: Hindsight memory | generated `hindsight.bootstrap.md` has exact commands |
+| optional: Paperclip | `npx paperclipai onboard --yes` |
+
+### 1. Install the CLI (once per machine, optional)
+
+```sh
+uv tool install git+https://github.com/<you>/piSoftwareFactory
+# local checkout instead:  uv tool install --force F:\SoftwareFactory
+sfactory --version
+```
+
+Skip this entirely if you prefer — the `uvx --from …` one-liner above runs
+without any install (uv caches it after first use).
+
+### 2. Bootstrap a project (once per project)
+
+```powershell
+cd Z:\WorkSources\zen\my-project
+sfactory init --auto
+```
+
+This detects your languages, probes llama.cpp (fills in model id + 65 536
+ctx), registers the pi provider, scaffolds ~17 files, makes a baseline
+commit, and **finishes with a doctor run** — so the one-liner ends with
+evidence, not hope. Expected tail:
+
+```
+Factory scaffolded.
+  auto mode: ON — unattended waves; the only human gate is the release merge
+  next steps:
+    sfactory run "<task>"          # one task through the whole pipeline
+    sfactory run "<task>" --queue  # or queue tasks, then: sfactory wave
+    sfactory release               # when a wave is done: stage → human gate → main
+```
+
+Anything the doctor flags yellow is optional (Hindsight/Paperclip) or a
+missing toolchain whose gates will simply skip with evidence.
+
+### 3. Day-to-day work
+
+**One task, full pipeline** (Intake → brief → lane worktree → pi worker →
+gates → fresh-context review → reflect):
+
+```powershell
+sfactory run "Add rate limiting to the login endpoint"
+```
+
+**Batch of tasks, parallel lanes** — queue them as they come to mind, then
+dispatch as one wave (one git worktree per lane):
+
+```powershell
+sfactory run "Add is_even helper + tests" --queue
+sfactory run "Document the public API in README" --queue
+sfactory run "Fix flaky checkout test" --queue
+sfactory wave          # executes every ready node, then reviews each
+```
+
+**While a wave runs / after it:**
+
+```powershell
+sfactory status                 # graph, worktrees, last gate evidence
+sfactory gates                  # deterministic gates on demand
+sfactory gates --lang python    # one language only
+sfactory review n003            # fresh-context review of one node
+```
+
+**Release** — the only human gate. The orchestrator never merges on its own:
+
+```powershell
+sfactory release                # merges done lanes into `stage`, shows the plan
+# …you review the stage branch…
+sfactory release --approve      # human-approved merge stage → main, dated tag
+```
+
+**Reflections** happen automatically after every run/wave; add context
+manually any time — incidents become gates:
+
+```powershell
+sfactory reflect --summary "checkout wave shipped clean" --incident "uv lockfile drift blocked lane 2"
+```
+
+### A typical day, end to end
+
+```powershell
+cd my-project
+sfactory status                          # where did we leave off? (memory/handover too)
+sfactory run "Implement retry with backoff in http client" --queue
+sfactory run "Add unit tests for retry" --queue
+sfactory wave                            # workers go brrr on llama.cpp, gates decide
+sfactory release                         # stage assembled; human gate message
+git diff main..stage                     # you review
+sfactory release --approve               # merge + tag release-20260928-…
+```
+
+### Optional services
+
+- **Hindsight memory** — follow the generated `hindsight.bootstrap.md`;
+  `sfactory doctor` turns its warning green once it's up. Without it the
+  factory runs fine — recall just returns nothing.
+- **Paperclip** — `npx paperclipai onboard --yes`, then `sfactory paperclip`
+  to see the company plan (Architect/Workers/Reviewer). Without it,
+  `sfactory` itself is the orchestrator.
+
+### Troubleshooting
+
+- **`sfactory` not recognized** → open a new terminal after `uv tool install`
+  (PATH is snapshotted per shell), or reinstall: `uv tool install --force F:\SoftwareFactory`.
+- **doctor fails on the backend** → is `llama-server` up at the URL in `factory.toml`?
+- **gates BLOCKED** → that's the system working; the evidence JSON in
+  `.factory/run/` names the failing step. Fix and re-run.
+
+
 ## The pipeline (8 stages)
 
 **Intake → Brief → Dispatch → Execute → Gates → Review → Release → Reflect**

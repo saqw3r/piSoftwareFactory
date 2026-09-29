@@ -47,6 +47,15 @@ def init(
 
     run_init(target=target, auto=auto, langs=langs, force=force, log=console.print)
 
+    # The one-liner ends with evidence: verify the environment right away.
+    try:
+        from .doctor import run_doctor
+
+        console.print("\n[bold]environment check:[/]")
+        run_doctor(target.resolve(), log=console.print)
+    except Exception as exc:  # noqa: BLE001 — never fail the scaffold on doctor
+        console.print(f"[yellow]doctor skipped[/] ({exc}); run `sfactory doctor` later")
+
 
 @app.command()
 def doctor() -> None:
@@ -92,6 +101,9 @@ def gates(
 def run(
     task: str = typer.Argument(..., help="Task description for Intake."),
     lang: str = typer.Option("", "--lang", help="Force the language/lane (default: Intake decides)."),
+    queue: bool = typer.Option(
+        False, "--queue", help="Intake only: add to the graph without dispatching (execute later with `sfactory wave`)."
+    ),
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
 ) -> None:
     """Run one task through the full pipeline: Intake → …→ Reflect (ADR-0007)."""
@@ -129,6 +141,11 @@ def run(
     )
     graph.add(node)
     save_graph(root, graph)
+
+    if queue:
+        commit_graph(root)
+        console.print(f"queued {node.id} — execute later with [bold]sfactory wave[/] (parallel across lanes)")
+        return
 
     result = dispatch_node(root, node, config, log=console.print)
     save_graph(root, graph)
