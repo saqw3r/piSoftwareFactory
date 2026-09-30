@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "piSoftwareFactory"
-version = "0.1.1"
+version = "0.1.2"
 description = "Local-first AI software factory: one-liner bootstrap, deterministic gates, pi workers on your own llama.cpp"
 readme = "README.md"
 license = "MIT"

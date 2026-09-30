@@ -14,6 +14,8 @@ app = typer.Typer(
     add_completion=False,
     help="Local-first AI software factory (piSoftwareFactory).",
 )
+services_app = typer.Typer(no_args_is_help=True, help="Provision optional local services (ADR-0015).")
+app.add_typer(services_app, name="services")
 console = Console()
 err = Console(stderr=True, style="bold red")
 
@@ -46,15 +48,70 @@ def init(
     from .scaffold import run_init
 
     run_init(target=target, auto=auto, langs=langs, force=force, log=console.print)
+    root = target.resolve()
+
+    if auto:
+        # ADR-0015: --auto brings up the whole floor (idempotent, non-fatal).
+        from .config import load_config
+        from .services import setup_all
+
+        console.print("\n[bold]services:[/]")
+        try:
+            config = load_config(root)
+            results = setup_all(root, config, log=console.print)
+            for name, state in results.items():
+                style = "green" if state in ("started", "already-running", "already-running (pidfile)") else "yellow"
+                console.print(f"  {name}: [{style}]{state}[/]")
+        except Exception as exc:  # noqa: BLE001 — services never break the scaffold
+            console.print(f"[yellow]service setup skipped[/] ({exc})")
 
     # The one-liner ends with evidence: verify the environment right away.
     try:
         from .doctor import run_doctor
 
         console.print("\n[bold]environment check:[/]")
-        run_doctor(target.resolve(), log=console.print)
+        run_doctor(root, log=console.print)
     except Exception as exc:  # noqa: BLE001 — never fail the scaffold on doctor
         console.print(f"[yellow]doctor skipped[/] ({exc}); run `sfactory doctor` later")
+
+
+@services_app.command()
+def setup(
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+) -> None:
+    """Install and start Hindsight + Paperclip (idempotent, ADR-0015)."""
+    from .config import load_config
+    from .services import setup_all
+
+    root = root.resolve()
+    config = load_config(root)
+    results = setup_all(root, config, log=console.print)
+    for name, state in results.items():
+        console.print(f"{name}: {state}")
+
+
+@services_app.command()
+def status(
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+) -> None:
+    """Show whether Hindsight / Paperclip are up."""
+    from .config import load_config
+    from .services import status as svc_status
+
+    state = svc_status(root.resolve(), load_config(root.resolve()))
+    for key, value in state.items():
+        console.print(f"{key}: {value}")
+
+
+@services_app.command()
+def stop(
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+) -> None:
+    """Stop factory-started Hindsight / Paperclip instances."""
+    from .services import stop_all
+
+    for name, state in stop_all(root.resolve(), log=console.print).items():
+        console.print(f"{name}: {state}")
 
 
 @app.command()

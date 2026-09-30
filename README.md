@@ -49,16 +49,17 @@ sfactory init --auto
 
 This detects your languages, probes llama.cpp (fills in model id + 65 536
 ctx), registers the pi provider, scaffolds ~17 files, makes a baseline
-commit, and **finishes with a doctor run** — so the one-liner ends with
-evidence, not hope. Expected tail:
+commit, **installs and starts Hindsight + Paperclip** (ADR-0015 — skipped
+without `--auto`), and **finishes with a doctor run** — so the one-liner
+ends with evidence, not hope. Expected tail:
 
 ```
-Factory scaffolded.
-  auto mode: ON — unattended waves; the only human gate is the release merge
-  next steps:
-    sfactory run "<task>"          # one task through the whole pipeline
-    sfactory run "<task>" --queue  # or queue tasks, then: sfactory wave
-    sfactory release               # when a wave is done: stage → human gate → main
+services:
+  hindsight: started
+  paperclip: started / starting — check .factory/run/paperclip.log
+environment check:
+  llama.cpp backend  ok  models=['qwen3.5-9b']; ctx=65536
+  hindsight memory   ok  http://127.0.0.1:8888
 ```
 
 Anything the doctor flags yellow is optional (Hindsight/Paperclip) or a
@@ -120,14 +121,19 @@ git diff main..stage                     # you review
 sfactory release --approve               # merge + tag release-20260928-…
 ```
 
-### Optional services
+### Optional services (auto-provisioned with `--auto`)
 
-- **Hindsight memory** — follow the generated `hindsight.bootstrap.md`;
-  `sfactory doctor` turns its warning green once it's up. Without it the
-  factory runs fine — recall just returns nothing.
-- **Paperclip** — `npx paperclipai onboard --yes`, then `sfactory paperclip`
-  to see the company plan (Architect/Workers/Reviewer). Without it,
-  `sfactory` itself is the orchestrator.
+- **Hindsight memory** — `sfactory init --auto` **installs and starts it for
+  you** (isolated uv env, llamacpp provider, detached process; idempotent).
+  Manage it with `sfactory services setup | status | stop`; manual
+  instructions remain in the generated `hindsight.bootstrap.md`.
+- **Paperclip** — `init --auto` also runs `npx paperclipai onboard --yes`
+  non-interactively (first run downloads the package; `sfactory services
+  status` tells you when :3100 is up). Then `sfactory paperclip` shows the
+  company plan. Without it, `sfactory` itself is the orchestrator.
+- Services are **never required**: any failure degrades to a warning with a
+  log path (`.factory/run/*.log`) and the pipeline keeps running
+  (ADR-0015).
 
 ### Troubleshooting
 
