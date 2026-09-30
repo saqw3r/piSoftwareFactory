@@ -161,9 +161,22 @@ def setup_paperclip(root: Path, log=print) -> str:
     if instance.exists():
         log(f"  existing Paperclip instance detected at {instance} — preserved untouched")
 
+    # Non-interactive first-run config (idempotent): `onboard --yes` accepts
+    # quickstart defaults AND starts the server immediately — so after it, the
+    # port decides; a follow-up `run` happens only if it did not come up.
+    onboard = _paperclip_cli(npx, "onboard", "--yes", "--no-install-service", timeout=900)
+    if onboard.returncode != 0 and not (instance / "config.json").is_file():
+        (run_dir / "paperclip.log").write_text(
+            (onboard.stdout + onboard.stderr)[-4000:], encoding="utf-8"
+        )
+        return "failed at onboard — see .factory/run/paperclip.log"
+
+    if paperclip.server_up():
+        return "started"
+
     # `service` management is unsupported on win32 ("use paperclipai run"):
     # POSIX gets the registered background service, Windows a detached run.
-    log("  starting paperclip (detached `paperclipai run`; downloads on first run)…")
+    log("  server not up after onboard — starting detached `paperclipai run`…")
     if os.name != "nt":
         installed = _paperclip_cli(npx, "service", "install")
         if installed.returncode == 0:
