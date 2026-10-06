@@ -4,10 +4,10 @@ A local-first, self-hosted **AI software factory** you bootstrap into any new
 project with a one-liner and run in full auto mode on your own machine.
 
 ```sh
-uvx --from git+https://github.com/<you>/piSoftwareFactory sfactory init --auto
+uvx --from git+https://github.com/saqw3r/piSoftwareFactory sfactory init --auto
 ```
 
-(`--from F:/SoftwareFactory` works locally before the repo is published.)
+(From a local checkout instead: `uvx --from F:\SoftwareFactory sfactory init --auto`.)
 
 - **Primary language**: Python — the factory tooling itself; it builds projects in **C#, Python, JS, Rust, C++, Go**
 - **Model backend**: any OpenAI-compatible endpoint as URL + key — default is your local llama.cpp server (`http://127.0.0.1:8080/v1`, Qwen 3.5, 65 536 ctx, mocked key `none`) so nothing leaves your machine; swap to OpenAI per project via `factory.toml` (see Model backend below)
@@ -23,21 +23,22 @@ uvx --from git+https://github.com/<you>/piSoftwareFactory sfactory init --auto
 | Need | Install |
 |---|---|
 | uv + Python 3.11+ | `powershell -c "irm https://astral.sh/uv/install.ps1 \| iex"` |
-| git | winget/choco/your usual way |
-| Node.js ≥ 24.11 + pi harness | `npm install -g @earendil-works/pi-coding-agent` |
+| git | `winget install Git.Git` (or `choco install git`) |
+| Node.js ≥ 24.11 + pi harness | `winget install OpenJS.NodeJS.LTS` then `npm install -g @earendil-works/pi-coding-agent` |
 | llama.cpp server | your own `llama-server` (example below); `sfactory init` probes it and fills in model + ctx |
 
 **Local llama.cpp setup (example, once per machine):**
 
 ```powershell
-# 1. Get a binary: https://github.com/ggerganov/llama.cpp/releases (or: winget install llama.cpp)
+# 1. Get a binary: https://github.com/ggerganov/llama.cpp/releases
+#    (or via winget, if a llama.cpp package is available there)
 # 2. Get a GGUF model, e.g. Qwen3 8B Q4_K_M (~5 GB) from Hugging Face into .\models\
 # 3. Serve it with the full 65k context the factory expects:
 .\llama-server.exe -m .\models\qwen3-8b-q4_k_m.gguf --host 127.0.0.1 --port 8080 -c 65536
 # 4. Verify (new terminal):
 invoke-restmethod http://127.0.0.1:8080/v1/models | convertto-json -depth 5
 # 5. Scaffold — init probes /v1/models and fills in factory.toml for you:
-cd Z:\WorkSources\zen\my-project
+cd C:\work\my-project
 sfactory init --auto
 ```
 
@@ -45,13 +46,13 @@ Notes: keep `-c 65536` (doctor warns if server ctx < configured ctx); GPU
 offload flags (`-ngl 99`) depend on your build — CPU-only works, just slower.
 Swap the `-m` file for any Qwen 3.x GGUF you prefer; `init` picks up the real
 model id automatically.
-| optional: Hindsight memory | generated `hindsight.bootstrap.md` has exact commands |
-| optional: Paperclip | `npx paperclipai onboard --yes` |
+| optional: Hindsight memory | auto-provisioned by `sfactory init --auto`; manual setup below |
+| optional: Paperclip | auto-provisioned by `sfactory init --auto`; manual setup below |
 
 ### 1. Install the CLI (once per machine, optional)
 
 ```sh
-uv tool install git+https://github.com/<you>/piSoftwareFactory
+uv tool install git+https://github.com/saqw3r/piSoftwareFactory
 # local checkout instead:  uv tool install --force F:\SoftwareFactory
 sfactory --version
 ```
@@ -62,7 +63,7 @@ without any install (uv caches it after first use).
 ### 2. Bootstrap a project (once per project)
 
 ```powershell
-cd Z:\WorkSources\zen\my-project
+cd C:\work\my-project
 sfactory init --auto
 ```
 
@@ -168,27 +169,128 @@ Swap back by restoring `provider = "llamacpp"`,
 Re-running `init` without `--force` never overwrites your scaffolded files —
 it only re-registers the pi provider and re-probes the backend.
 
+### Project languages: changing the primary language
+
+The factory tooling itself is always Python; `languages` in `factory.toml`
+is what *your project* is built in — it decides which deterministic gates run
+and what Intake assumes. **The first entry is the primary language**: when
+Intake can't tell from the task text, it falls back to `languages[0]`.
+
+```powershell
+# At scaffold time — force instead of auto-detect:
+sfactory init --langs python,go
+
+# Afterwards — edit factory.toml (primary first):
+#   languages = ["go", "python"]
+sfactory gates          # all listed languages, in order
+sfactory gates --lang go   # one language only
+```
+
+Per-task override without touching the config:
+
+```powershell
+sfactory run "port the parser to Go" --lang go
+```
+
+Auto-detect looks for marker files (`*.csproj`/`*.sln`, `pyproject.toml`,
+`package.json`, `Cargo.toml`, `CMakeLists.txt`, `go.mod`) — unknown values in
+`--langs` are rejected, valid: `csharp, python, js, rust, cpp, go`. Note the
+"Languages active in this repo" list in `AGENTS.md` is a scaffold-time
+snapshot: re-running `init` won't touch it without `--force`, so update that
+list by hand when you change `factory.toml`.
+
 ### Optional services (auto-provisioned with `--auto`)
 
-- **Hindsight memory** — `sfactory init --auto` **installs and starts it for
-  you** (isolated uv env, llamacpp provider, detached process; idempotent).
-  Manage it with `sfactory services setup | status | stop`; manual
-  instructions remain in the generated `hindsight.bootstrap.md`.
-- **Paperclip** — `init --auto` also runs `npx paperclipai onboard --yes`
-  non-interactively (first run downloads the package; `sfactory services
-  status` tells you when :3100 is up). Then `sfactory paperclip` shows the
-  company plan. Without it, `sfactory` itself is the orchestrator.
-- Services are **never required**: any failure degrades to a warning with a
-  log path (`.factory/run/*.log`) and the pipeline keeps running
-  (ADR-0015).
+Services are **never required**: any failure degrades to a warning with a
+log path (`.factory/run/*.log`) and the pipeline keeps running (ADR-0015).
+Manage them any time with:
+
+```powershell
+sfactory services setup   # install + start Hindsight and Paperclip (idempotent)
+sfactory services status  # up / down + pids per service
+sfactory services stop    # stop factory-started instances
+```
+
+#### Hindsight memory
+
+- **Via the factory (recommended):** `sfactory init --auto` or
+  `sfactory services setup` installs `hindsight-api` into an isolated uv
+  tool env if missing, then starts it detached (PID + log in
+  `.factory/run/`) with the LLM provider pointed at your `factory.toml`
+  backend and local embeddings. Idempotent — an already-running server is
+  left alone.
+- **Manually:** `pip install hindsight-api` (or
+  `uv tool install hindsight-api`), then run it with the backend from
+  `factory.toml`:
+
+```powershell
+$env:HINDSIGHT_API_LLM_PROVIDER="llamacpp"
+$env:HINDSIGHT_API_LLM_API_BASE="http://127.0.0.1:8080/v1"
+$env:HINDSIGHT_API_LLM_MODEL="qwen3.5-9b"
+$env:HINDSIGHT_API_LLM_API_KEY="none"
+$env:HINDSIGHT_API_EMBEDDINGS_PROVIDER="local"
+hindsight-api
+# API: http://localhost:8888 — UI: http://localhost:9999
+```
+
+  The generated `hindsight.bootstrap.md` in your project repeats these steps
+  with your actual model filled in, plus a Docker alternative. Without
+  Hindsight the factory runs normally — recall just returns empty and memory
+  files stay the source of truth.
+
+#### Paperclip
+
+- **Via the factory (recommended):** `sfactory init --auto` or
+  `sfactory services setup` runs `npx paperclipai onboard --yes
+  --no-install-service` non-interactively (first run downloads the package),
+  then starts the server if onboard didn't (`paperclipai run` detached on
+  Windows, background service on POSIX). An existing `~/.paperclip` instance
+  is preserved untouched. `sfactory services status` tells you when `:3100`
+  answers; `sfactory paperclip` then shows the company plan seeded from
+  `paperclip.company.json`.
+- **Manually:**
+
+```powershell
+npx paperclipai onboard --yes   # one-time config; starts the server
+npx paperclipai run             # if the server isn't up afterwards
+# server: http://127.0.0.1:3100
+```
+
+  Without Paperclip, `sfactory` itself is the orchestrator — the management
+  layer is purely optional.
 
 ### Troubleshooting
 
 - **`sfactory` not recognized** → open a new terminal after `uv tool install`
-  (PATH is snapshotted per shell), or reinstall: `uv tool install --force F:\SoftwareFactory`.
+  (PATH is snapshotted per shell), or reinstall:
+  `uv tool install --force git+https://github.com/saqw3r/piSoftwareFactory`.
 - **doctor fails on the backend** → is the server up at the URL in `factory.toml` (`llama-server` for local, `https://api.openai.com/v1` + `$OPENAI_API_KEY` for OpenAI)?
 - **gates BLOCKED** → that's the system working; the evidence JSON in
   `.factory/run/` names the failing step. Fix and re-run.
+
+### Updating and uninstalling
+
+**CLI** (installed as uv tool `pisoftwarefactory`):
+
+```powershell
+uv tool install --force git+https://github.com/saqw3r/piSoftwareFactory  # update to latest
+sfactory --version                                                        # verify
+uv tool uninstall pisoftwarefactory                                       # uninstall
+```
+
+**Scaffold inside a project** (there is no remove command — it's just files
+plus git branches):
+
+```powershell
+sfactory services stop                     # stop factory-started Hindsight/Paperclip
+git worktree remove --force .factory/worktrees/L1  # per lane (see `git worktree list`)
+git branch -D lane/L1 stage                # lane branches + stage, if created
+# then delete: AGENTS.md, factory.toml, launch.graph.json, .factory/,
+#   memory/, hindsight.bootstrap.md, paperclip.company.json — and commit
+```
+
+Optional: remove the provider block the scaffold added to
+`~/.pi/agent/models.json` (a backup sits at `models.json.bak`).
 
 
 ## The pipeline (8 stages)
@@ -246,11 +348,13 @@ to overwrite).
 
 ## One-time services (all optional, all local)
 
-- **Hindsight memory**: see the generated `hindsight.bootstrap.md` (pip or
-  Docker; LLM provider = the same llama.cpp). Without it the factory runs
-  and memory files stay complete — recall just returns empty.
-- **Paperclip**: `npx paperclipai onboard --yes` (Node 24.11+), then
-  `sfactory paperclip`. Without it, `sfactory` is the orchestrator.
+- **Hindsight memory**: `sfactory services setup` (or manual pip/Docker —
+  see Optional services above and the generated `hindsight.bootstrap.md`).
+  LLM provider = the same backend as the factory. Without it the factory
+  runs and memory files stay complete — recall just returns empty.
+- **Paperclip**: `sfactory services setup` (or `npx paperclipai onboard
+  --yes` manually; Node 24.11+), then `sfactory paperclip`. Without it,
+  `sfactory` is the orchestrator.
 
 ## Context discipline (65k window)
 
@@ -261,7 +365,7 @@ events; gate feedback truncated head+tail.
 ## Governance
 
 Every architectural and major product decision is recorded as an ADR in
-[`decisions/`](decisions/) (ADR-0001…0014) — proposed, approved by the
+[`decisions/`](decisions/) (ADR-0001…0016) — proposed, approved by the
 owner, then implemented. See `ADR-0008-governance.md`. Scaffolded projects
 inherit the pattern (`memory/decisions.md`).
 
