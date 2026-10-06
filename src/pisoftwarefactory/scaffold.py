@@ -376,6 +376,7 @@ PAPERCLIP_COMPANY_JSON = """\
     "harness": {
       "name": "pi",
       "command": "pi --mode json @brief.md",
+      "provider": "{{ provider }}",
       "model": "{{ model }}",
       "endpoint": "{{ base_url }}"
     },
@@ -441,19 +442,25 @@ def _probe_backend(config: FactoryConfig, log) -> None:
 
 
 def _ensure_pi_provider(config: FactoryConfig, log) -> None:
-    """Register the llamacpp provider in pi's agent directory (ADR-0002).
+    """Register the backend provider in pi's agent directory (ADR-0002).
 
     pi loads ``models.json`` from ``<agent-dir>`` only (``~/.pi/agent`` by
     default, ``PI_CODING_AGENT_DIR`` to override) — a project-local
     ``.pi/models.json`` is ignored, so the provider must be merged there.
     The original file is backed up once before the first modification.
+
+    Generalized URL + key: ``api_key_env`` empty → mocked ``"none"``
+    (llama.cpp default); otherwise the env var value is written so pi can
+    authenticate (e.g. OpenAI). The secret itself never lands in factory.toml.
     """
     agent_dir = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent"))
     models_path = agent_dir / "models.json"
+    provider = config.backend.provider
+    api_key = config.backend.resolve_api_key()
     provider_block = {
         "baseUrl": config.backend.base_url,
-        "api": "openai-completions",
-        "apiKey": "none",
+        "api": config.backend.api,
+        "apiKey": api_key,
         "models": [{"id": config.backend.model}],
     }
     try:
@@ -462,21 +469,24 @@ def _ensure_pi_provider(config: FactoryConfig, log) -> None:
         existing = None
         log(f"  [yellow]{models_path} is not valid JSON; it will be replaced (backup kept)")
 
-    if existing and existing.get("providers", {}).get("llamacpp") == provider_block:
-        log(f"  [green]pi provider ok[/] llamacpp → {config.backend.base_url} ({models_path})")
+    if existing and existing.get("providers", {}).get(provider) == provider_block:
+        log(f"  [green]pi provider ok[/] {provider} → {config.backend.base_url} ({models_path})")
         return
 
+    if config.backend.api_key_env and api_key == "none":
+        log(f"  [yellow]${config.backend.api_key_env} is not set[/] — wrote placeholder key for provider {provider!r}; export it before dispatching")
+
     if existing is None:
-        new_data: dict = {"providers": {"llamacpp": provider_block}}
+        new_data: dict = {"providers": {provider: provider_block}}
     else:
         if not models_path.with_suffix(".json.bak").exists():
             shutil.copy2(models_path, models_path.with_suffix(".json.bak"))
         new_data = existing
-        new_data.setdefault("providers", {})["llamacpp"] = provider_block
+        new_data.setdefault("providers", {})[provider] = provider_block
 
     agent_dir.mkdir(parents=True, exist_ok=True)
     models_path.write_text(json.dumps(new_data, indent=2) + "\n", encoding="utf-8")
-    log(f"  [green]pi provider registered[/] llamacpp → {config.backend.base_url} in {models_path}")
+    log(f"  [green]pi provider registered[/] {provider} → {config.backend.base_url} in {models_path}")
 
 
 def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
@@ -510,6 +520,7 @@ def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
         "project_name": root.name,
         "languages": languages,
         "auto": auto,
+        "provider": config.backend.provider,
         "base_url": config.backend.base_url,
         "model": config.backend.model,
         "main_branch": config.release.main_branch,

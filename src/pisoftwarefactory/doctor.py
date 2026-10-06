@@ -6,6 +6,7 @@ a critical dependency (llama.cpp backend or the pi harness) is missing.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -68,26 +69,33 @@ def run_doctor(root: Path, log) -> int:  # pragma: no cover - interactive output
               "npm install -g @earendil-works/pi-coding-agent")
     )
 
-    # Backend (critical)
+    # Backend (critical) — generalized URL + key (llama.cpp default, OpenAI-compatible swap-in)
     if config:
+        backend_label = f"{config.backend.provider} backend"
+        if config.backend.api_key_env:
+            if os.environ.get(config.backend.api_key_env):
+                checks.append(Check("backend api key", "ok", f"${config.backend.api_key_env} is set"))
+            else:
+                checks.append(Check("backend api key", "warn", f"${config.backend.api_key_env} is not set",
+                                      f"export {config.backend.api_key_env}=... (pi sends it as apiKey to {config.backend.base_url})"))
         try:
             info = probe_backend(config.backend.base_url)
             if info.healthy:
-                detail = f"models={info.models}"
+                detail = f"provider={config.backend.provider} models={info.models}"
                 if info.context_window and info.context_window < config.backend.context_window:
-                    checks.append(Check("llama.cpp backend", "warn", f"{detail}; server ctx {info.context_window} < configured {config.backend.context_window}", "align factory.toml backend.context_window"))
+                    checks.append(Check(backend_label, "warn", f"{detail}; server ctx {info.context_window} < configured {config.backend.context_window}", "align factory.toml backend.context_window"))
                 elif info.context_window:
-                    checks.append(Check("llama.cpp backend", "ok", f"{detail}; ctx={info.context_window}"))
+                    checks.append(Check(backend_label, "ok", f"{detail}; ctx={info.context_window}"))
                 else:
-                    checks.append(Check("llama.cpp backend", "ok", detail + " (ctx not reported)"))
+                    checks.append(Check(backend_label, "ok", detail + " (ctx not reported)"))
                 if config.backend.model not in info.models:
                     checks.append(Check("model id", "warn", f"configured {config.backend.model!r} not in {info.models}", "update factory.toml backend.model"))
             else:
-                checks.append(Check("llama.cpp backend", "fail", "no models reported", "start llama-server"))
+                checks.append(Check(backend_label, "fail", "no models reported", f"is the server up at {config.backend.base_url}?"))
         except Exception as exc:  # noqa: BLE001
-            checks.append(Check("llama.cpp backend", "fail", str(exc), f"is llama-server up at {config.backend.base_url}?"))
+            checks.append(Check(backend_label, "fail", str(exc), f"is the server up at {config.backend.base_url}?"))
     else:
-        checks.append(Check("llama.cpp backend", "warn", "skipped (no factory.toml)"))
+        checks.append(Check("llamacpp backend", "warn", "skipped (no factory.toml)"))
 
     # Memory
     if config:
@@ -118,7 +126,7 @@ def run_doctor(root: Path, log) -> int:  # pragma: no cover - interactive output
     critical_fail = False
     for c in checks:
         style = {"ok": "green", "warn": "yellow", "fail": "red"}[c.state]
-        if c.state == "fail" and c.name in ("llama.cpp backend", "pi harness"):
+        if c.state == "fail" and (c.name.endswith("backend") or c.name == "pi harness"):
             critical_fail = True
         table.add_row(c.name, f"[{style}]{c.state}[/]", c.detail, c.hint)
     log(table)

@@ -104,7 +104,7 @@ def _base_command(config: FactoryConfig, mode: str) -> list[str]:
     cmd = [
         binary,
         "--no-session",
-        "--provider", "llamacpp",
+        "--provider", config.backend.provider,
         "--model", config.backend.model,
     ]
     if mode == "json":

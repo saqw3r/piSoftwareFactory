@@ -10,7 +10,7 @@ uvx --from git+https://github.com/<you>/piSoftwareFactory sfactory init --auto
 (`--from F:/SoftwareFactory` works locally before the repo is published.)
 
 - **Primary language**: Python — the factory tooling itself; it builds projects in **C#, Python, JS, Rust, C++, Go**
-- **Model backend**: your running llama.cpp server (default `http://127.0.0.1:8080/v1`, Qwen 3.5, 65 536 ctx) — nothing leaves your machine
+- **Model backend**: any OpenAI-compatible endpoint as URL + key — default is your local llama.cpp server (`http://127.0.0.1:8080/v1`, Qwen 3.5, 65 536 ctx, mocked key `none`) so nothing leaves your machine; swap to OpenAI per project via `factory.toml` (see Model backend below)
 - **Worker harness**: [pi coding agent](https://github.com/badlogic/pi-mono) headless (`--mode json` workers, `--print --tools read,grep,find,ls` reviewers)
 - **Multi-agent management**: [Paperclip](https://github.com/paperclipai/paperclip) companies (Architect → per-lane Workers → Reviewer)
 - **Memory**: [Hindsight](https://github.com/vectorize-io/hindsight) (retain / recall / reflect, per-repo banks, MCP endpoint)
@@ -25,7 +25,26 @@ uvx --from git+https://github.com/<you>/piSoftwareFactory sfactory init --auto
 | uv + Python 3.11+ | `powershell -c "irm https://astral.sh/uv/install.ps1 \| iex"` |
 | git | winget/choco/your usual way |
 | Node.js ≥ 24.11 + pi harness | `npm install -g @earendil-works/pi-coding-agent` |
-| llama.cpp server | your own `llama-server` (e.g. `-m qwen3.5-9b.gguf --port 8080`); `sfactory init` probes it and fills in model + ctx |
+| llama.cpp server | your own `llama-server` (example below); `sfactory init` probes it and fills in model + ctx |
+
+**Local llama.cpp setup (example, once per machine):**
+
+```powershell
+# 1. Get a binary: https://github.com/ggerganov/llama.cpp/releases (or: winget install llama.cpp)
+# 2. Get a GGUF model, e.g. Qwen3 8B Q4_K_M (~5 GB) from Hugging Face into .\models\
+# 3. Serve it with the full 65k context the factory expects:
+.\llama-server.exe -m .\models\qwen3-8b-q4_k_m.gguf --host 127.0.0.1 --port 8080 -c 65536
+# 4. Verify (new terminal):
+invoke-restmethod http://127.0.0.1:8080/v1/models | convertto-json -depth 5
+# 5. Scaffold — init probes /v1/models and fills in factory.toml for you:
+cd Z:\WorkSources\zen\my-project
+sfactory init --auto
+```
+
+Notes: keep `-c 65536` (doctor warns if server ctx < configured ctx); GPU
+offload flags (`-ngl 99`) depend on your build — CPU-only works, just slower.
+Swap the `-m` file for any Qwen 3.x GGUF you prefer; `init` picks up the real
+model id automatically.
 | optional: Hindsight memory | generated `hindsight.bootstrap.md` has exact commands |
 | optional: Paperclip | `npx paperclipai onboard --yes` |
 
@@ -121,6 +140,34 @@ git diff main..stage                     # you review
 sfactory release --approve               # merge + tag release-20260928-…
 ```
 
+### Model backend: local llama.cpp vs OpenAI (one backend per project)
+
+The backend is a generalized OpenAI-compatible endpoint (`factory.toml [backend]`:
+`provider` + `base_url` + `model` + `api_key_env`). Scaffolding defaults to
+local llama.cpp (`provider = "llamacpp"`, mocked key) — nothing leaves your
+machine. To swap one project to OpenAI (one key, secret stays in env):
+
+```toml
+# factory.toml
+[backend]
+provider = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
+api = "openai-completions"
+api_key_env = "OPENAI_API_KEY"
+```
+
+```powershell
+$env:OPENAI_API_KEY="sk-..."
+sfactory init      # re-registers the pi provider (safe without --force)
+sfactory doctor    # should show openai backend ok + api key ok
+```
+
+Swap back by restoring `provider = "llamacpp"`,
+`base_url = "http://127.0.0.1:8080/v1"`, `api_key_env = ""` + `sfactory init`.
+Re-running `init` without `--force` never overwrites your scaffolded files —
+it only re-registers the pi provider and re-probes the backend.
+
 ### Optional services (auto-provisioned with `--auto`)
 
 - **Hindsight memory** — `sfactory init --auto` **installs and starts it for
@@ -139,7 +186,7 @@ sfactory release --approve               # merge + tag release-20260928-…
 
 - **`sfactory` not recognized** → open a new terminal after `uv tool install`
   (PATH is snapshotted per shell), or reinstall: `uv tool install --force F:\SoftwareFactory`.
-- **doctor fails on the backend** → is `llama-server` up at the URL in `factory.toml`?
+- **doctor fails on the backend** → is the server up at the URL in `factory.toml` (`llama-server` for local, `https://api.openai.com/v1` + `$OPENAI_API_KEY` for OpenAI)?
 - **gates BLOCKED** → that's the system working; the evidence JSON in
   `.factory/run/` names the failing step. Fix and re-run.
 
@@ -187,7 +234,7 @@ to overwrite).
 | Command | Purpose |
 |---|---|
 | `sfactory init [--auto] [--langs …]` | scaffold the factory into a project |
-| `sfactory doctor` | verify llama.cpp model/ctx, node+pi, hindsight, paperclip, toolchains |
+| `sfactory doctor` | verify backend model/ctx + api key, node+pi, hindsight, paperclip, toolchains |
 | `sfactory run "task"` | one task through the whole pipeline |
 | `sfactory wave` | dispatch all ready nodes across lanes |
 | `sfactory gates [--lang X]` | run deterministic gates on demand |
@@ -222,7 +269,7 @@ inherit the pattern (`memory/decisions.md`).
 
 ```sh
 uv sync          # install with dev group
-uv run pytest    # 25 offline tests (no server needed)
+uv run pytest    # 27 offline tests (no server needed)
 uv run sfactory doctor
 ```
 

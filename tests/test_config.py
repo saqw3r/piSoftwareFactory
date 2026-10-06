@@ -34,3 +34,21 @@ def test_partial_toml_uses_defaults(tmp_path):
     cfg = load_config(tmp_path)
     assert cfg.backend.model == "other"
     assert cfg.backend.context_window == 65536
+
+
+def test_backend_generalized_url_plus_key(monkeypatch):
+    cfg = FactoryConfig()
+    # default is llama.cpp with a mocked key
+    assert cfg.backend.provider == "llamacpp"
+    assert cfg.backend.api_key_env == ""
+    assert cfg.backend.resolve_api_key() == "none"
+
+    # OpenAI swap: URL + env key, secret never in factory.toml
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    cfg.backend.provider = "openai"
+    cfg.backend.base_url = "https://api.openai.com/v1"
+    cfg.backend.api_key_env = "OPENAI_API_KEY"
+    assert cfg.backend.resolve_api_key() == "sk-test"
+
+    monkeypatch.delenv("OPENAI_API_KEY")
+    assert cfg.backend.resolve_api_key() == "none"

@@ -3,10 +3,16 @@
 Schema accepted by ADR-0012 (scaffold file set) and ADR-0010 (model
 backend). Everything has a local-first default so an untouched config
 targets the owner's llama.cpp at 127.0.0.1:8080.
+
+The backend is generalized as URL + key (OpenAI-compatible): llama.cpp
+simply uses a mocked key (``api_key_env`` empty → ``"none"``); setting
+``provider``/``base_url``/``model`` + ``api_key_env`` swaps in OpenAI
+(or any compatible endpoint) without code changes.
 """
 
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 from typing import Any, Literal
@@ -22,11 +28,26 @@ FACTORY_TOML = "factory.toml"
 
 
 class Backend(BaseModel):
-    """The single LLM backend every factory component talks to (ADR-0010)."""
+    """The single LLM backend every factory component talks to (ADR-0010).
 
+    Generalized OpenAI-compatible endpoint: ``provider`` selects the pi
+    provider block, ``api`` the pi API flavor, ``api_key_env`` the env
+    var holding the key. Empty ``api_key_env`` means a mocked key
+    (llama.cpp default: ``"none"``) — nothing secret lands in factory.toml.
+    """
+
+    provider: str = "llamacpp"
     base_url: str = "http://127.0.0.1:8080/v1"
     model: str = "qwen3.5-9b"
     context_window: int = 65536
+    api: str = "openai-completions"
+    api_key_env: str = ""
+
+    def resolve_api_key(self) -> str:
+        """Real key from ``api_key_env``, or the mocked ``"none"`` default."""
+        if not self.api_key_env:
+            return "none"
+        return os.environ.get(self.api_key_env, "") or "none"
 
 
 class Harness(BaseModel):
