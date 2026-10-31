@@ -63,10 +63,15 @@ def run_doctor(root: Path, log) -> int:  # pragma: no cover - interactive output
     else:
         checks.append(Check("node", "fail", "missing", "install Node.js 24.11+ (pi + Paperclip)"))
 
-    pi = _run_version(("pi", "--version")) or "missing"
+    # The chosen worker brain (ADR-0017: pi or omp — either one, per project)
+    harness = config.harness.name if config else "pi"
+    other = "omp" if harness == "pi" else "pi"
+    version = _run_version((harness, "--version")) or "missing"
     checks.append(
-        Check("pi harness", "ok" if pi != "missing" else "fail", pi,
-              "npm install -g @earendil-works/pi-coding-agent")
+        Check(f"harness: {harness}", "ok" if version != "missing" else "fail", version,
+              f"`sfactory backend --harness {harness}` configures it, or switch with "
+              f"`sfactory backend --harness {other}`"
+              if version == "missing" else f"the other harness ({other}) is also selectable")
     )
 
     # Backend (critical) — generalized URL + key (llama.cpp default, OpenAI-compatible swap-in)

@@ -215,6 +215,14 @@ def provision(root: Path, log=print) -> int:
         log(f"cannot load company seed: {exc}")
         return 1
 
+    harness_name = seed.get("company", {}).get("harness", {}).get("name", "pi")
+    if harness_name != "pi":
+        log(f"  [skip] Paperclip has no {harness_name} adapter (its adapters are fixed: pi_local, "
+            "claude_local, codex_local, opencode_local, gemini_local, grok_local, kimi_local, "
+            "hermes_local, paperclip_runner, process, http) — agents are hired on pi_local against "
+            f"the same endpoint and model. `{harness_name}` still runs this project's pipeline via "
+            "`sfactory run` / `sfactory wave`.")
+
     rc = 0
     try:
         state, detail, cid = ensure_company(seed)

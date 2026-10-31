@@ -169,6 +169,37 @@ Swap back by restoring `provider = "llamacpp"`,
 Re-running `init` without `--force` never overwrites your scaffolded files —
 it only re-registers the pi provider and re-probes the backend.
 
+### Worker brain: pi or omp, and where its model comes from (ADR-0017)
+
+`sfactory backend` asks two questions and then **runs one real prompt through
+the agent it just configured** — so "saved" means "answered", not "the file
+says so". Pass everything as flags and it asks nothing (`-y` takes defaults).
+
+```powershell
+sfactory backend                       # interactive: harness + source + model
+sfactory backend --harness omp -y      # omp on the local llama.cpp, no questions
+sfactory backend --harness pi --source openai-endpoint `
+         --base-url https://api.openai.com/v1 --api-key-env OPENAI_API_KEY
+sfactory backend --source harness-login --login   # subscription: hands you the agent's own login
+```
+
+Sources: `llama-local` (your endpoint, mocked key — the default),
+`openai-endpoint` (URL + key from the environment; the secret never lands in
+`factory.toml`), `harness-login` (a provider the agent authenticates to itself).
+The model list comes from the live endpoint first, so you pick from what actually
+answers; if the endpoint is silent, the agent's own catalog is used.
+
+Nothing to edit by hand: the same command merges the provider into the harness's
+registry (`~/.pi/agent/models.json` for pi, `~/.omp/agent/models.yml` for omp —
+backed up once on the first write) and updates the Paperclip seed's `harness`
+block. A failed check leaves `factory.toml` untouched and prints the agent's own
+error with the next command to run.
+
+Note on Paperclip: its adapter set is fixed and has no `omp` adapter, so with
+`--harness omp` the company's agents are hired on `pi_local` against the **same
+endpoint and model** (the command says so rather than pretending otherwise),
+while `sfactory run` / `sfactory wave` use omp.
+
 ### Project languages: changing the primary language
 
 The factory tooling itself is always Python; `languages` in `factory.toml`
@@ -360,7 +391,8 @@ to overwrite).
 | Command | Purpose |
 |---|---|
 | `sfactory init [--auto] [--langs …]` | scaffold the factory into a project |
-| `sfactory doctor` | verify backend model/ctx + api key, node+pi, hindsight, paperclip, toolchains |
+| `sfactory backend [--harness pi\|omp] [--source …] [-y]` | choose the worker brain and prove it answers |
+| `sfactory doctor` | verify backend model/ctx + api key, node+harness, hindsight, paperclip, toolchains |
 | `sfactory run "task"` | one task through the whole pipeline |
 | `sfactory wave` | dispatch all ready nodes across lanes |
 | `sfactory gates [--lang X]` | run deterministic gates on demand |
