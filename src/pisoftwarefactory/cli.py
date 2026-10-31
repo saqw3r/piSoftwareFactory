@@ -74,8 +74,10 @@ def _start_file_log(root: Path) -> Path | None:
     """Tee all console output to ``.factory/run/sfactory-<cmd>-<stamp>.log``.
 
     Called first in every command (after this, consoles are rebound so rich
-    writes through the tee). Prints the log path up front; returns it.
-    Best-effort: returns None when the run dir can't be created.
+    writes through the tee). The path stays unannounced: everything the log
+    holds is already on the terminal, and naming a file first teaches the
+    operator to go read one. Best-effort: returns None when the run dir
+    can't be created.
     """
     global console, err
     path: Path | None = None
@@ -93,7 +95,6 @@ def _start_file_log(root: Path) -> Path | None:
         sys.stderr = _Tee(sys.stderr, fh)  # type: ignore[assignment]
         console = Console()
         err = Console(stderr=True)
-        console.print(f"[dim]full log: {path}[/]")
     _echo_invocation()
     return path
 
