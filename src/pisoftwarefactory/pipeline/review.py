@@ -8,9 +8,9 @@ achieved by a separate pi process with restricted tools).
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
+from .. import gitcmd
 from ..config import FactoryConfig
 from ..integrations.pi_agent import run_reviewer
 from .graph import Node
@@ -61,12 +61,13 @@ DIFF-END
 
 
 def lane_diff(root: Path, node: Node, main_branch: str) -> str:
-    proc = subprocess.run(
-        ("git", "-C", str(root), "diff", f"{main_branch}...HEAD"),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    """The lane's diff, or GitRefused.
+
+    An empty diff and a refused ``git diff`` used to be the same string here, and
+    the reviewer was handed ``(no diff yet)`` and asked to review it — which is
+    how a lane with no work got a verdict.
+    """
+    proc = gitcmd.run(root, "diff", f"{main_branch}...HEAD")
     diff = proc.stdout or ""
     if len(diff.splitlines()) > 400:  # context discipline (ADR-0010)
         lines = diff.splitlines()

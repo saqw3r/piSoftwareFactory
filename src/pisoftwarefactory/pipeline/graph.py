@@ -87,13 +87,17 @@ def commit_graph(root: Path) -> bool:
     granularity is one commit). Keeps `sfactory release`'s clean-tree gate
     passable without manual housekeeping. Returns True when a commit was made."""
     import os
-    import subprocess
+
+    from .. import gitcmd
 
     root = root.resolve()
-    subprocess.run(("git", "-C", str(root), "add", "launch.graph.json"), check=False)
-    proc = subprocess.run(
-        ("git", "-C", str(root), "commit", "-m", "chore(graph): record node state"),
-        capture_output=True, text=True, check=False,
+    gitcmd.run(root, "add", "launch.graph.json", check=False)
+    proc = gitcmd.run(
+        root,
+        "commit",
+        "-m",
+        "chore(graph): record node state",
+        check=False,
         env={**os.environ, "GIT_EDITOR": "true"},
     )
     return proc.returncode == 0

@@ -9,11 +9,12 @@ importable.
 from __future__ import annotations
 
 import json
-import subprocess
+import os
 from pathlib import Path
 
 from jinja2 import Template
 
+from . import gitcmd
 from .config import (
     ALL_LANGUAGES,
     FactoryConfig,
@@ -399,25 +400,19 @@ def _write(path: Path, content: str, force: bool, log) -> bool:
 
 
 def _git(root: Path, *args: str) -> str:
-    return subprocess.run(
-        ("git", "-C", str(root), *args), capture_output=True, text=True, check=True
-    ).stdout
+    return gitcmd.run(root, *args).stdout
 
 
 def _ensure_baseline_commit(root: Path, log) -> None:
     """Lane worktrees need a commit to branch from; a bare `git init` has none."""
-    head = subprocess.run(
-        ("git", "-C", str(root), "rev-parse", "--verify", "HEAD"), capture_output=True
-    )
+    head = gitcmd.run(root, "rev-parse", "--verify", "HEAD", check=False)
     if head.returncode == 0:
         return
-    subprocess.run(("git", "-C", str(root), "add", "-A"), check=False)
+    gitcmd.run(root, "add", "-A", check=False)
     env = {"GIT_EDITOR": "true", "GIT_AUTHOR_NAME": "sfactory", "GIT_AUTHOR_EMAIL": "sfactory@local",
            "GIT_COMMITTER_NAME": "sfactory", "GIT_COMMITTER_EMAIL": "sfactory@local"}
-    proc = subprocess.run(
-        ("git", "-C", str(root), "commit", "-m", "chore: baseline before factory scaffold"),
-        capture_output=True, text=True, env=env,
-    )
+    proc = gitcmd.run(root, "commit", "-m", "chore: baseline before factory scaffold",
+                      check=False, env={**os.environ, **env})
     if proc.returncode == 0:
         log("  [green]created baseline commit[/] (lane worktrees branch from it)")
     else:
@@ -446,10 +441,7 @@ def _detect_base_ref(root: Path) -> str:
     Reads the current symref, so it works on fresh (`git init -b …`) and
     existing repos alike; falls back to `main` when git can't say.
     """
-    proc = subprocess.run(
-        ("git", "-C", str(root), "branch", "--show-current"),
-        capture_output=True, text=True,
-    )
+    proc = gitcmd.run(root, "branch", "--show-current", check=False)
     name = proc.stdout.strip()
     return name if proc.returncode == 0 and name else "main"
 
@@ -459,7 +451,7 @@ def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
     root = target.resolve()
 
     if not (root / ".git").exists():
-        subprocess.run(("git", "init", "-b", "main"), cwd=root, check=True, capture_output=True)
+        gitcmd.run(root, "init", "-b", "main")
         log(f"[green]git init[/] {root} (new projects need git; lane worktrees depend on it)")
 
     if langs.strip():

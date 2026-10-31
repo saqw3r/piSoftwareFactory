@@ -5,10 +5,10 @@ a human-approved merge. The orchestrator never merges on its own — without
 
 from __future__ import annotations
 
-import subprocess
 import time
 from pathlib import Path
 
+from .. import gitcmd
 from ..config import FactoryConfig
 from .graph import Graph
 
@@ -17,8 +17,7 @@ class ReleaseError(RuntimeError):
     pass
 
 
-def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(("git", "-C", str(root), *args), capture_output=True, text=True, check=check)
+_git = gitcmd.run
 
 
 def _require_clean(root: Path) -> None:

@@ -98,6 +98,24 @@ def _start_file_log(root: Path) -> Path | None:
     return path
 
 
+def _review_or_die(root: Path, node, config, wt: Path) -> None:  # node: pipeline.graph.Node
+    """Review the lane, or stop with git's own words.
+
+    A reviewer handed an unreadable diff reviews nothing and still emits a
+    verdict — which is how a node with no work behind it printed `done`. The
+    refusal belongs in the operator's face, not in a file.
+    """
+    from .gitcmd import GitRefused
+    from .pipeline.review import review_node
+
+    try:
+        review_node(root, node, config, cwd=wt)
+    except GitRefused as exc:
+        err.print(f"[red]review could not read the lane diff[/] — {node.id} stays unreviewed")
+        err.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+
 @app.callback()
 def _root(
     version: bool = typer.Option(
@@ -284,7 +302,6 @@ def run(
     from .pipeline.graph import Graph, Node, commit_graph, load_graph, save_graph
     from .pipeline.intake import run_intake
     from .pipeline.reflect import reflect
-    from .pipeline.review import review_node
 
     root = root.resolve()
     config = load_config(root)
@@ -326,12 +343,12 @@ def run(
         reflect(root, config, graph, f"{node.id} blocked by gates", incident="gate failure loop exhausted")
         save_graph(root, graph)
         commit_graph(root)
-        err.print(f"node {node.id} BLOCKED by gates — see evidence in .factory/run/")
+        err.print(f"node {node.id} BLOCKED — {result.evidence or 'no evidence recorded'}")
         raise typer.Exit(code=1)
 
-    wt = root / ".factory" / "worktrees" / node.lane
     console.print("review: fresh-context reviewer reading the lane diff…")
-    review_node(root, node, config, cwd=wt)
+    wt = root / ".factory" / "worktrees" / node.lane
+    _review_or_die(root, node, config, wt)
     if node.verdict == "blockers":
         node.status = "blocked"
         node.gate_status = "pass"
@@ -343,7 +360,10 @@ def run(
     save_graph(root, graph)
     commit_graph(root)
     reflect(root, config, graph, f"{node.id} completed: {node.title} (verdict {node.verdict or 'n/a'})")
-    console.print(f"[green]done[/] {node.id} `{node.title}` verdict={node.verdict or 'n/a'} — merge via `sfactory release`")
+    console.print(f"[green]done[/] {node.id} `{node.title}` verdict={node.verdict or 'n/a'}")
+    # "done" without saying where the work sits is the question asked next.
+    console.print(f"  work: branch [bold]lane/{node.lane}[/] in {wt}")
+    console.print(f"  merge: `sfactory release` assembles stage; `sfactory release --approve` moves {config.release.main_branch}")
 
 
 @app.command()
@@ -353,6 +373,7 @@ def wave(
     """Dispatch all ready graph nodes across lanes/worktrees (ADR-0007)."""
     _start_file_log(root)
     from .config import load_config
+    from .gitcmd import GitRefused
     from .pipeline.dispatch import dispatch_wave
     from .pipeline.graph import commit_graph, load_graph, save_graph
     from .pipeline.reflect import reflect
@@ -369,11 +390,17 @@ def wave(
     results = dispatch_wave(root, graph, config, log=console.print)
     for result in results:
         node = result.node
-        if node.status == "done":
-            wt = root / ".factory" / "worktrees" / node.lane
+        if node.status != "done":
+            continue
+        wt = root / ".factory" / "worktrees" / node.lane
+        try:
             review_node(root, node, config, cwd=wt)
-            if node.verdict == "blockers":
-                node.status = "blocked"
+        except GitRefused as exc:
+            # One unreadable lane doesn't cancel the rest of the wave's reviews.
+            console.print(f"[red]{node.id} unreviewed[/] — the lane diff could not be read\n{exc}")
+            continue
+        if node.verdict == "blockers":
+            node.status = "blocked"
     save_graph(root, graph)
     commit_graph(root)
 
@@ -392,7 +419,6 @@ def review(
     _start_file_log(root)
     from .config import load_config
     from .pipeline.graph import load_graph, save_graph
-    from .pipeline.review import review_node
 
     root = root.resolve()
     config = load_config(root)
@@ -407,7 +433,7 @@ def review(
         target = candidates[-1]
 
     wt = root / ".factory" / "worktrees" / (target.lane or "L1")
-    review_node(root, target, config, cwd=wt)
+    _review_or_die(root, target, config, wt)
     save_graph(root, graph)
     style = {"clean": "green", "nits": "yellow"}.get(target.verdict, "red")
     console.print(f"review {target.id}: [{style}]{target.verdict or 'no verdict parsed'}[/]")
@@ -496,10 +522,10 @@ def status(
     """Show graph, lanes, and last gate evidence."""
     _start_file_log(root)
     import json
-    import subprocess
 
     from rich.table import Table
 
+    from . import gitcmd
     from .pipeline.graph import load_graph
 
     root = root.resolve()
@@ -512,10 +538,8 @@ def status(
         table.add_row(n.id, n.title[:48], n.kind, n.risk, n.lane, n.status, n.gate_status or "—", n.verdict or "—")
     console.print(table)
 
-    wt = subprocess.run(
-        ("git", "-C", str(root), "worktree", "list"), capture_output=True, text=True
-    )
-    console.print(f"worktrees:\n{wt.stdout.strip() or '(none)'}")
+    wt = gitcmd.run(root, "worktree", "list", check=False)
+    console.print(f"worktrees:\n{wt.stdout.strip() or wt.stderr.strip() or '(none)'}")
 
     run_dir = root / ".factory" / "run"
     if run_dir.is_dir():

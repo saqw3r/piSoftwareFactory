@@ -8,22 +8,17 @@ come from; accepted proposals become gates.
 from __future__ import annotations
 
 import json
-import subprocess
 import time
 from pathlib import Path
 
+from .. import gitcmd
 from ..config import FactoryConfig, bank_id_for
 from ..integrations import hindsight
 from .graph import Graph
 
 
 def _recent_commits(root: Path, n: int = 10) -> list[str]:
-    proc = subprocess.run(
-        ("git", "-C", str(root), "log", "--oneline", f"-{n}"),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    proc = gitcmd.run(root, "log", "--oneline", f"-{n}", check=False)
     return [line for line in (proc.stdout or "").splitlines() if line.strip()]
 
 
