@@ -13,6 +13,7 @@ from pathlib import Path
 
 from ..config import FactoryConfig, load_config
 from ..gates import run_gates
+from ..harnesses import remedy
 from ..integrations import hindsight
 from ..integrations.pi_agent import PiRun, run_worker
 from .brief import render_brief, write_brief
@@ -103,6 +104,18 @@ def _memories_for(root: Path, config: FactoryConfig, node: Node) -> list[str]:
     )
 
 
+def _lane_produced_change(wt: Path, base_ref: str) -> bool:
+    """Did the worker actually leave work behind — a commit or an edit?
+
+    Gates passing on a lane identical to its base proves nothing; this is the
+    check that keeps an empty run from becoming a `done` node.
+    """
+    ahead = _git(wt, "rev-list", "--count", f"{base_ref}..HEAD", check=False).stdout.strip()
+    if ahead.isdigit() and int(ahead) > 0:
+        return True
+    return bool(_git(wt, "status", "--porcelain", check=False).stdout.strip())
+
+
 def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, log=print) -> DispatchResult:
     """Run one node through Execute → Gates (with bounded retries)."""
     root = root.resolve()
@@ -114,16 +127,31 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
     worker_runs: list[PiRun] = []
     gate_feedback = ""
     gate_pass = False
+    worker_died = False
+    evidence = ""
 
     for attempt in range(config.harness.max_retries + 1):
         brief = render_brief(
             node, lane=lane, main_branch=config.release.main_branch, memories=memories, gate_feedback=gate_feedback
         )
         brief_path = write_brief(wt / ".factory" / "briefs", node, brief)
-        log(f"  [bold]{node.id}[/] attempt {attempt + 1}: pi worker on lane {lane} (brief={brief_path.name})")
+        log(f"  [bold]{node.id}[/] attempt {attempt + 1}: {config.harness.name} worker on lane {lane} "
+              f"(brief={brief_path.name})")
         run = run_worker(brief_path, config, cwd=wt)
         worker_runs.append(run)
-        log(f"    pi finished rc={run.returncode} in {run.duration_s:.0f}s (~{run.input_tokens}in/{run.output_tokens}out tok)")
+        log(f"    {config.harness.name} finished rc={run.returncode} in {run.duration_s:.0f}s "
+            f"(~{run.input_tokens}in/{run.output_tokens}out tok)")
+        if not run.ok:
+            # A dead agent changed nothing, so the gates would pass on an empty
+            # lane and the node would be marked done without a line of work.
+            worker_died = True
+            log("    [red]the agent died before the model answered[/] — this lane has no change")
+            for line in (run.final_text or "").strip().splitlines()[-6:]:
+                log(f"      │ {line[:300]}")
+            fix = remedy(run.final_text or "", config.backend, config.harness.name)
+            if fix:
+                log(f"    fix: {fix}")
+            break
 
         log(f"    gates running in {wt.name}…")
         results = run_gates(wt, config)
@@ -140,8 +168,14 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
         )
         log(f"    gates BLOCKED ({evidence}) — feeding output back to worker")
 
+    produced = _lane_produced_change(wt, _resolve_base_ref(root, config, log))
+    if worker_died:
+        evidence = evidence or f"{config.harness.name} exited rc={worker_runs[-1].returncode} with no change"
+    elif gate_pass and not produced:
+        evidence = "the agent finished cleanly but left no commit and no edit in the lane"
+        log(f"    [red]{evidence}[/] — not marking it done")
     node.gate_status = "pass" if gate_pass else "blocked"
-    node.status = "done" if gate_pass else "blocked"
+    node.status = "done" if (gate_pass and produced and not worker_died) else "blocked"
     node.touch()
     if gate_pass:
         hindsight.retain(

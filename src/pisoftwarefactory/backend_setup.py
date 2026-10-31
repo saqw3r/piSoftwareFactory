@@ -242,26 +242,12 @@ def _verify(harness: str, backend: Backend, log, runtime_key: bool = True) -> in
     if rc != 0:
         tail = "\n".join(output.splitlines()[-8:]) or "(no output)"
         log(f"  [red]{harness} failed[/] (exit {rc}):\n{tail}")
-        hint = _failure_remedy(harness, backend, output)
+        hint = harnesses.remedy(output, backend, harness)
         if hint:
             log(f"  fix: {hint}")
         return 4
     log("  [green]the harness answered[/] — this backend works")
     return 0
-
-
-def _failure_remedy(harness: str, backend: Backend, output: str) -> str:
-    """Map the agent's own error words to the next command, no log file needed."""
-    lowered = output.lower()
-    if "no api key" in lowered or ("api key" in lowered and "not found" in lowered):
-        return (f"the agent has no credential for provider {backend.provider!r}: {harnesses.login_hint(harness)}"
-                f" — then re-run `sfactory backend --harness {harness} --source harness-login`")
-    if "connect" in output.lower() or "ECONNREFUSED" in output:
-        return (f"nothing is serving {backend.base_url} — start the endpoint (llama-router / llama-server) "
-                "or pass --base-url / --source openai-endpoint")
-    if "model" in output.lower() and "not" in output.lower():
-        return f"{backend.model!r} is not offered by this endpoint — re-run and pick from the list"
-    return ""
 
 
 def _finish(

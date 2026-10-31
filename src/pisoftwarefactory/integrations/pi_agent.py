@@ -1,20 +1,20 @@
-"""pi coding agent wrapper (ADR-0002).
+"""coding-agent wrapper (ADR-0002/ADR-0017): pi or omp, one JSONL reader.
 
-Workers run ``pi --mode json`` (JSONL events → orchestrator parses progress
-and token usage); reviewers run ``pi --print --tools read,grep,find,ls``
+Workers run ``<agent> --mode json`` (JSONL events → orchestrator parses progress
+and token usage); reviewers run ``<agent> --print --tools read,grep,find,ls``
 (fresh-context, read-only). Events are parsed defensively: the orchestrator
-never depends on pi's internal event schema beyond ``type`` and ``usage``.
+never depends on the agent's internal event schema beyond ``type`` and ``usage``.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config import FactoryConfig
+from ..harnesses import binary, installed, selectable_model_id
 
 
 class PiError(RuntimeError):
@@ -92,21 +92,29 @@ def _parse_events(stdout: str) -> PiRun:
 
 
 def _base_command(config: FactoryConfig, mode: str) -> list[str]:
-    """Build a pi command line.
+    """Build the agent command line for the configured harness (ADR-0017).
 
     Worker (headless JSONL stream): ``--mode json``. Reviewer (one-shot,
     read-only): the ``--print`` flag — print is a flag in pi, not a mode
     (``--mode`` accepts only text|json|rpc).
+
+    Where the harnesses genuinely differ: pi needs ``--provider`` plus the key on
+    the command line (for a custom endpoint it ignores models.json's apiKey and
+    the provider env var, and a local llama.cpp wants the mocked ``"none"``),
+    while omp selects ``provider/id`` and reads its key from its own registry.
     """
-    binary = shutil.which("pi")
-    if binary is None:
-        raise PiError("pi not found on PATH — install with: npm install -g @earendil-works/pi-coding-agent")
-    cmd = [
-        binary,
-        "--no-session",
-        "--provider", config.backend.provider,
-        "--model", config.backend.model,
-    ]
+    name = config.harness.name
+    if not installed(name):
+        other = "omp" if name == "pi" else "pi"
+        raise PiError(
+            f"{name} not found on PATH — install it, or switch with `sfactory backend --harness {other}`"
+        )
+    cmd = [binary(name), "--no-session"]
+    if name == "omp":
+        cmd += ["--model", selectable_model_id(name, config.backend)]
+    else:
+        cmd += ["--provider", config.backend.provider, "--model", config.backend.model,
+                "--api-key", config.backend.resolve_api_key()]
     if mode == "json":
         cmd += ["--mode", "json"]
     else:
@@ -125,6 +133,7 @@ def run_worker(brief_path: Path, config: FactoryConfig, cwd: Path) -> PiRun:
         capture_output=True,
         text=True,
         timeout=config.harness.worker_timeout_min * 60,
+        check=False,
         encoding="utf-8",
         errors="replace",
     )
@@ -149,6 +158,7 @@ def run_reviewer(prompt: str, config: FactoryConfig, cwd: Path, timeout_min: int
         capture_output=True,
         text=True,
         timeout=timeout_min * 60,
+        check=False,
         encoding="utf-8",
         errors="replace",
     )

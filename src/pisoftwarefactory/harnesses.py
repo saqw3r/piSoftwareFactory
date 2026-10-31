@@ -242,6 +242,26 @@ def login_hint(name: str) -> str:
     return "run `pi`, type `/login`, pick the provider, and use key `none` for a local llama.cpp endpoint"
 
 
+def remedy(output: str, backend: Backend, harness: str = "pi") -> str:
+    """Map the harness's own error words to the next command — no log file needed.
+
+    Shared by `sfactory backend` (which proves a choice) and dispatch (which
+    discovers the failure mid-wave): the fix for a dead agent must reach the
+    operator wherever the agent was spawned from.
+    """
+    lowered = output.lower()
+    if "no api key" in lowered or ("api key" in lowered and "not found" in lowered):
+        return (f"the agent has no credential for provider {backend.provider!r}: {login_hint(harness)}"
+                " — or pass the key at runtime, which `sfactory backend` and dispatch both do now")
+    if "connect" in lowered or "econnrefused" in lowered:
+        return (f"nothing is serving {backend.base_url} — start the endpoint (llama-router / llama-server) "
+                "or point the project elsewhere with `sfactory backend --source openai-endpoint`")
+    if "model" in lowered and ("not found" in lowered or "not offered" in lowered):
+        return (f"{backend.model!r} is not offered by this endpoint — `sfactory backend` lists what it "
+                "does serve (note: a HF repo id is not a served model name)")
+    return ""
+
+
 def check_auth(name: str, backend: Backend) -> tuple[bool, str]:
     """Ask the harness whether it can serve this provider — no secret is read here.
 
