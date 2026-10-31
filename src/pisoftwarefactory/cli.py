@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import time
 from pathlib import Path
 
 import typer
@@ -9,12 +11,18 @@ from rich.console import Console
 
 from . import __version__
 
+# -h everywhere, not just --help: muscle memory shouldn't pay a retry.
+_HELP_CTX = {"help_option_names": ["-h", "--help"]}
+
 app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
+    context_settings=_HELP_CTX,
     help="Local-first AI software factory (piSoftwareFactory).",
 )
-services_app = typer.Typer(no_args_is_help=True, help="Provision optional local services (ADR-0015).")
+services_app = typer.Typer(
+    no_args_is_help=True, context_settings=_HELP_CTX, help="Provision optional local services (ADR-0015)."
+)
 app.add_typer(services_app, name="services")
 console = Console()
 err = Console(stderr=True, style="bold red")
@@ -26,10 +34,74 @@ def _version(value: bool) -> None:
         raise typer.Exit()
 
 
+def _echo_invocation() -> None:
+    """Echo the invoked command highlighted; internal step logs stream after it.
+
+    Skipped for --help/--version so those stay machine-clean.
+    """
+    args = sys.argv[1:]
+    if not args or any(a in ("-h", "--help", "-v", "--version") for a in args):
+        return
+    console.print(f"[bold bright_cyan]$ sfactory {' '.join(args)}[/]\n")
+
+
+class _Tee:
+    """Split stream: terminal + log file.
+
+    Attribute passthrough (isatty/fileno/encoding) keeps rich colors and
+    terminal detection intact — only write/flush are intercepted.
+    """
+
+    def __init__(self, stream, logfile) -> None:
+        self._stream = stream
+        self._logfile = logfile
+
+    def write(self, data):
+        self._stream.write(data)
+        self._logfile.write(data)
+        self._logfile.flush()
+        return len(data)
+
+    def flush(self):
+        self._stream.flush()
+        self._logfile.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def _start_file_log(root: Path) -> Path | None:
+    """Tee all console output to ``.factory/run/sfactory-<cmd>-<stamp>.log``.
+
+    Called first in every command (after this, consoles are rebound so rich
+    writes through the tee). Prints the log path up front; returns it.
+    Best-effort: returns None when the run dir can't be created.
+    """
+    global console, err
+    path: Path | None = None
+    try:
+        run_dir = root.resolve() / ".factory" / "run"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        parts = [a for a in sys.argv[1:] if not a.startswith("-")][:2] or ["sfactory"]
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        path = run_dir / f"sfactory-{'-'.join(parts)}-{stamp}.log"
+        fh = path.open("a", encoding="utf-8", errors="replace")
+    except OSError:
+        fh = None
+    if fh is not None and path is not None:
+        sys.stdout = _Tee(sys.stdout, fh)  # type: ignore[assignment]
+        sys.stderr = _Tee(sys.stderr, fh)  # type: ignore[assignment]
+        console = Console()
+        err = Console(stderr=True)
+        console.print(f"[dim]full log: {path}[/]")
+    _echo_invocation()
+    return path
+
+
 @app.callback()
 def _root(
     version: bool = typer.Option(
-        False, "--version", callback=_version, is_eager=True, help="Show version and exit."
+        False, "-v", "--version", callback=_version, is_eager=True, help="Show version and exit."
     ),
 ) -> None:
     """Local-first AI software factory (piSoftwareFactory)."""
@@ -45,6 +117,7 @@ def init(
     force: bool = typer.Option(False, "--force", help="Overwrite existing scaffolded files."),
 ) -> None:
     """Scaffold the factory into a project (ADR-0012)."""
+    _start_file_log(target)
     from .scaffold import run_init
 
     run_init(target=target, auto=auto, langs=langs, force=force, log=console.print)
@@ -80,6 +153,7 @@ def setup(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
 ) -> None:
     """Install and start Hindsight + Paperclip (idempotent, ADR-0015)."""
+    _start_file_log(root)
     from .config import load_config
     from .services import setup_all
 
@@ -95,6 +169,7 @@ def status(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
 ) -> None:
     """Show whether Hindsight / Paperclip are up."""
+    _start_file_log(root)
     from .config import load_config
     from .services import status as svc_status
 
@@ -108,6 +183,7 @@ def stop(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
 ) -> None:
     """Stop factory-started Hindsight / Paperclip instances."""
+    _start_file_log(root)
     from .services import stop_all
 
     for name, state in stop_all(root.resolve(), log=console.print).items():
@@ -117,9 +193,21 @@ def stop(
 @app.command()
 def doctor() -> None:
     """Verify the local factory environment (llama.cpp, pi, hindsight, paperclip, toolchains)."""
+    _start_file_log(Path("."))
     from .doctor import run_doctor
 
     raise typer.Exit(code=run_doctor(Path("."), log=console.print))
+
+
+@app.command()
+def update() -> None:
+    """Reinstall sfactory from the source it was installed from (uv tool)."""
+    import tempfile
+
+    _start_file_log(Path(tempfile.gettempdir()))
+    from .selfupdate import run_update
+
+    raise typer.Exit(code=run_update(log=console.print))
 
 
 @app.command()
@@ -128,6 +216,7 @@ def gates(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
 ) -> None:
     """Run deterministic verification gates (ADR-0013)."""
+    _start_file_log(root)
     from rich.table import Table
 
     from .config import load_config
@@ -164,6 +253,7 @@ def run(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
 ) -> None:
     """Run one task through the full pipeline: Intake → …→ Reflect (ADR-0007)."""
+    _start_file_log(root)
     from .config import load_config
     from .pipeline.dispatch import dispatch_node
     from .pipeline.graph import Graph, Node, commit_graph, load_graph, save_graph
@@ -236,6 +326,7 @@ def wave(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
 ) -> None:
     """Dispatch all ready graph nodes across lanes/worktrees (ADR-0007)."""
+    _start_file_log(root)
     from .config import load_config
     from .pipeline.dispatch import dispatch_wave
     from .pipeline.graph import commit_graph, load_graph, save_graph
@@ -273,6 +364,7 @@ def review(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
 ) -> None:
     """Fresh-context read-only review with a clean|nits|blockers verdict (ADR-0007)."""
+    _start_file_log(root)
     from .config import load_config
     from .pipeline.graph import load_graph, save_graph
     from .pipeline.review import review_node
@@ -304,6 +396,7 @@ def release(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
 ) -> None:
     """Assemble stage branch; merge to main ONLY with human approval (ADR-0007)."""
+    _start_file_log(root)
     from .config import load_config
     from .pipeline.graph import commit_graph, load_graph, save_graph
     from .pipeline.release import collect, merge_to_main
@@ -338,6 +431,7 @@ def reflect(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
 ) -> None:
     """Retain wave/incident learnings in Hindsight + memory/ files (ADR-0005)."""
+    _start_file_log(root)
     from .config import load_config
     from .pipeline.graph import load_graph
     from .pipeline.reflect import reflect
@@ -353,13 +447,20 @@ def reflect(
 @app.command()
 def paperclip(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
+    provision: bool = typer.Option(
+        False, "--provision",
+        help="Apply the seed: create company, hire agents, import open graph nodes as tickets (idempotent).",
+    ),
 ) -> None:
     """Provision/inspect the Paperclip company for this project (ADR-0006)."""
+    _start_file_log(root)
     from .integrations import paperclip as pc
 
     root = root.resolve()
     up = pc.server_up()
     console.print(f"paperclip server: {'[green]running[/]' if up else '[yellow]not running[/]'} ({pc.DEFAULT_SERVER})")
+    if provision:
+        raise typer.Exit(code=pc.provision(root, log=console.print))
     console.print(pc.provision_plan(root))
 
 
@@ -368,6 +469,7 @@ def status(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
 ) -> None:
     """Show graph, lanes, and last gate evidence."""
+    _start_file_log(root)
     import json
     import subprocess
 
