@@ -43,6 +43,17 @@ def installed(name: str) -> bool:
     return shutil.which(name) is not None
 
 
+def binary(name: str) -> str:
+    """Absolute path of the harness launcher.
+
+    Windows cannot CreateProcess an extensionless `pi` — npm installs it as
+    `pi.CMD`, which only runs when the extension is part of the path handed to
+    the API. Spawning the resolved path keeps the .cmd shim (and its own
+    node/python launchers) working without going through a shell.
+    """
+    return shutil.which(name) or name
+
+
 def agent_dir(name: str) -> Path:
     """Where the harness keeps auth + model registry (env override first)."""
     override = os.environ.get("PI_CODING_AGENT_DIR" if name == "pi" else "OMP_CODING_AGENT_DIR")
@@ -178,7 +189,7 @@ def endpoint_models(backend: Backend) -> list[str]:
 
 def harness_models(name: str) -> list[str]:
     """The harness's own catalog (subscription providers included)."""
-    argv = ("omp", "models", "ls", "--json") if name == "omp" else ("pi", "--list-models")
+    argv = (binary(name), "models", "ls", "--json") if name == "omp" else (binary(name), "--list-models")
     proc = subprocess.run(argv, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
         return []
@@ -192,17 +203,26 @@ def harness_models(name: str) -> list[str]:
     return sorted({line.strip() for line in out.splitlines() if line.strip() and " " not in line.strip()})
 
 
-def verify_argv(name: str, backend: Backend) -> list[str]:
-    """One-shot prompt run — the harness must answer, proving auth + model work."""
+def verify_argv(name: str, backend: Backend, runtime_key: bool = True) -> list[str]:
+    """One-shot prompt run — the harness must answer, proving auth + model work.
+
+    pi only honors a key handed to it on the command line for a custom endpoint
+    (observed: models.json's ``apiKey`` and the provider env var are both
+    ignored there), so ``runtime_key`` keeps that flag for URL+key backends and
+    drops it for subscription providers, where the stored credential is the one
+    that must be proven.
+    """
     if name == "omp":
-        return [name, "--model", selectable_model_id(name, backend), "--print", _VERIFY_PROMPT]
-    return [name, "--provider", backend.provider, "--model", backend.model,
-            "--api-key", backend.resolve_api_key(), "--print", _VERIFY_PROMPT]
+        return [binary(name), "--model", selectable_model_id(name, backend), "--print", _VERIFY_PROMPT]
+    argv = [binary(name), "--provider", backend.provider, "--model", backend.model]
+    if runtime_key:
+        argv += ["--api-key", backend.resolve_api_key()]
+    return argv + ["--print", _VERIFY_PROMPT]
 
 
 def login_argv(name: str) -> list[str]:
     """The interactive command that hands the terminal to the harness login."""
-    return [name, "login"] if name == "omp" else [name]
+    return [binary(name), "login"] if name == "omp" else [binary(name)]
 
 
 def login_hint(name: str) -> str:
@@ -219,7 +239,7 @@ def check_auth(name: str, backend: Backend) -> tuple[bool, str]:
     """
     if name == "pi":
         proc = subprocess.run(
-            ("pi", "auth", "check", "--provider", backend.provider, "--json"),
+            (binary("pi"), "auth", "check", "--provider", backend.provider, "--json"),
             capture_output=True, text=True, check=False,
         )
         try:

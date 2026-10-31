@@ -80,7 +80,8 @@ def test_unset_key_env_warns_before_writing_the_placeholder(monkeypatch):
     assert any("OPENAI_API_KEY is not set" in m for m in msgs)
 
 
-def test_verify_argv_matches_each_harness_flag_shape():
+def test_verify_argv_matches_each_harness_flag_shape(monkeypatch):
+    monkeypatch.setattr(harnesses, "binary", lambda name: name)
     backend = _backend()
     assert harnesses.verify_argv("pi", backend) == [
         "pi", "--provider", "llamacpp", "--model", "qwen3.5-9b", "--api-key", "none", "--print",
@@ -90,7 +91,22 @@ def test_verify_argv_matches_each_harness_flag_shape():
     assert argv[:3] == ["omp", "--model", "llamacpp/qwen3.5-9b"]
 
 
-def test_login_handoff_is_the_harness_own_command():
+def test_subscription_check_drops_the_runtime_key_flag(monkeypatch):
+    """A stored OAuth credential must be proven as-is — a mocked key would override it."""
+    monkeypatch.setattr(harnesses, "binary", lambda name: name)
+    argv = harnesses.verify_argv("pi", _backend(provider="openrouter"), runtime_key=False)
+    assert "--api-key" not in argv
+
+
+def test_spawn_uses_the_resolved_launcher_path(monkeypatch):
+    """Windows runs npm's `pi.CMD` only when the extension is in the path given to it."""
+    monkeypatch.setattr(harnesses.shutil, "which", lambda name: f"C:\\npm\\{name.upper()}.CMD")
+    assert harnesses.verify_argv("pi", _backend())[0] == "C:\\npm\\PI.CMD"
+    assert harnesses.login_argv("pi") == ["C:\\npm\\PI.CMD"]
+
+
+def test_login_handoff_is_the_harness_own_command(monkeypatch):
+    monkeypatch.setattr(harnesses, "binary", lambda name: name)
     assert harnesses.login_argv("omp") == ["omp", "login"]
     assert harnesses.login_argv("pi") == ["pi"]
     assert "/login" in harnesses.login_hint("pi")

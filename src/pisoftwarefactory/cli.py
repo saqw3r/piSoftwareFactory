@@ -211,6 +211,31 @@ def update() -> None:
 
 
 @app.command()
+def backend(
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+    harness: str = typer.Option("", "--harness", help="Coding agent: pi | omp."),
+    source: str = typer.Option("", "--source", help="llama-local | openai-endpoint | harness-login."),
+    base_url: str = typer.Option("", "--base-url", help="Endpoint serving /v1/models."),
+    model: str = typer.Option("", "--model", help="Model id (otherwise picked from the live list)."),
+    api_key_env: str = typer.Option("", "--api-key-env", help="Env var holding the endpoint key."),
+    provider: str = typer.Option("", "--provider", help="Provider id the agent knows this endpoint by."),
+    login: bool = typer.Option(False, "--login", help="Hand the terminal to the agent's own login flow."),
+    verify: bool = typer.Option(True, "--verify/--no-verify", help="Run one real prompt through the agent."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="No questions — take the defaults and the values passed."),
+) -> None:
+    """Choose the worker brain — pi/omp × local llama.cpp / OpenAI endpoint / subscription login."""
+    _start_file_log(root)
+    from .backend_setup import run_backend
+
+    code = run_backend(
+        root, harness=harness, source=source, base_url=base_url, model=model,
+        api_key_env=api_key_env, provider=provider, login=login, verify=verify, yes=yes,
+        log=console.print,
+    )
+    raise typer.Exit(code=code)
+
+
+@app.command()
 def gates(
     lang: str = typer.Option("", "--lang", help="Run a single language's gates."),
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
