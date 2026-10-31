@@ -24,6 +24,7 @@ import typer
 
 from . import harnesses
 from .config import Backend, FactoryConfig, load_config, save_config
+from .integrations.pi_agent import stream_agent
 
 DEFAULT_LOCAL_URL = "http://127.0.0.1:8080/v1"
 DEFAULT_OPENAI_URL = "https://api.openai.com/v1"
@@ -45,22 +46,9 @@ def _run_stream(argv: list[str], log, timeout: int = _VERIFY_TIMEOUT_SEC) -> tup
     Streaming is the point: a local model loading for a minute looks identical
     to a hang when nothing is printed, and the owner should see which it is.
     """
-    proc = subprocess.Popen(
-        argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, errors="replace", bufsize=1,
-    )
-    lines: list[str] = []
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        lines.append(line)
-        if line.strip():
-            log(f"  │ {line.rstrip()[:300]}")
-    try:
-        rc = proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        return (124, "".join(lines))
-    return (rc, "".join(lines))
+    rc, out, errtext = stream_agent(argv, None, timeout, argv[0] if argv else "the agent",
+                                    log=log, quiet_s=30, echo_text=True)
+    return (rc, out + errtext)
 
 
 def pick_source(ask: Callable[..., str], log) -> str:
@@ -144,6 +132,7 @@ def run_backend(
     provider: str = "",
     login: bool = False,
     verify: bool = True,
+    verify_timeout_min: int = 0,
     yes: bool = False,
     log=print,
     ask: Callable[..., str] = typer.prompt,
@@ -161,6 +150,10 @@ def run_backend(
     except FileNotFoundError:
         log(f"[yellow]no factory.toml in {root}[/] — using local defaults; run `sfactory init` to scaffold the rest")
         config = FactoryConfig()
+
+    # A local GGUF spends most of a verify turn reading pi's system prompt, so
+    # the budget is the project's own setting, not a constant tuned for APIs.
+    verify_budget = (verify_timeout_min or config.harness.verify_timeout_min) * 60
 
     def _ask(text: str, default: str) -> str:
         if yes:
@@ -194,7 +187,7 @@ def run_backend(
             if not ready:
                 log(f"  {harness} reports: {detail}")
             _handover_login(harness, log)
-        outcome = _verify(harness, backend, log, runtime_key=False)
+        outcome = _verify(harness, backend, log, runtime_key=False, timeout_s=verify_budget)
         _finish(config, harness, backend, root, outcome, log, registry=False)
         return outcome
 
@@ -225,19 +218,24 @@ def run_backend(
         candidate = candidate.model_copy(update={"model": pick_model(listed, candidate.model, _ask, log)})
 
     harnesses.register_provider(harness, candidate, log)
-    outcome = _verify(harness, candidate, log) if verify else 0
+    outcome = _verify(harness, candidate, log, timeout_s=verify_budget) if verify else 0
     _finish(config, harness, candidate, root, outcome, log, registry=True)
     return outcome
 
 
-def _verify(harness: str, backend: Backend, log, runtime_key: bool = True) -> int:
+def _verify(harness: str, backend: Backend, log, runtime_key: bool = True, timeout_s: int = _VERIFY_TIMEOUT_SEC) -> int:
     """One real prompt through the agent — the only proof that counts."""
     argv = harnesses.verify_argv(harness, backend, runtime_key=runtime_key)
     log(f"  checking: {' '.join(argv[:5])} …")
-    rc, output = _run_stream(argv, log)
+    log(f"  [dim]budget {timeout_s // 60} min — a local GGUF spends most of it reading the "
+        "agent's system prompt; raise [harness] verify_timeout_min if this box is slower[/]")
+    rc, output = _run_stream(argv, log, timeout=timeout_s)
     if rc == 124:
-        log(f"  [red]no answer within {_VERIFY_TIMEOUT_SEC}s[/] — the model may still be loading; "
-            "re-run once the endpoint is warm")
+        log(f"  [red]no answer within {timeout_s}s[/] — {backend.model!r} at {backend.base_url} "
+            "is slower than the budget, not necessarily broken")
+        hint = harnesses.remedy("timed out", backend, harness)
+        if hint:
+            log(f"  fix: {hint}")
         return 3
     if rc != 0:
         tail = "\n".join(output.splitlines()[-8:]) or "(no output)"

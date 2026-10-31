@@ -57,6 +57,7 @@ class Harness(BaseModel):
     worker_mode: Literal["json", "print"] = "json"
     review_mode: Literal["print", "json"] = "print"
     worker_timeout_min: int = 40
+    verify_timeout_min: int = 12
     max_retries: int = 2
     worker_tools: list[str] = Field(
         default_factory=lambda: ["read", "edit", "write", "bash", "grep", "find", "ls"]

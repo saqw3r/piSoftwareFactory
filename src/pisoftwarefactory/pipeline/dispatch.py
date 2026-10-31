@@ -154,7 +154,7 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
         log(f"  [bold]{node.id}[/] attempt {attempt + 1}: {config.harness.name} worker "
               f"({config.backend.model} @ {config.backend.base_url}) on lane {lane} "
               f"(brief={brief_path.name})")
-        run = run_worker(brief_path, config, cwd=wt)
+        run = run_worker(brief_path, config, cwd=wt, log=log)
         worker_runs.append(run)
         log(f"    {config.harness.name} finished rc={run.returncode} in {run.duration_s:.0f}s "
             f"(~{run.input_tokens}in/{run.output_tokens}out tok)")

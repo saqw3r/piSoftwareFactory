@@ -21,6 +21,11 @@ class PiError(RuntimeError):
     pass
 
 
+# Test seam: `stream_agent` spawns through this, so progress and timeouts can be
+# exercised without a real coding agent on PATH.
+_POPEN = subprocess.Popen
+
+
 @dataclass
 class PiRun:
     returncode: int
@@ -131,27 +136,124 @@ def _base_command(config: FactoryConfig, mode: str) -> list[str]:
     return cmd
 
 
-def run_worker(brief_path: Path, config: FactoryConfig, cwd: Path) -> PiRun:
-    """Execute one element from a rendered brief; JSON events stream to us."""
+_SILENT_EVENTS = frozenset({"session", "message_start", "turn_start", "entry_appended", "agent_settled"})
+
+
+def _describe(event: dict, elapsed_s: float) -> str:
+    """One line per meaningful agent event, so a long turn is not confused with a hang.
+
+    Rendered defensively from whatever the event carries: the agent's schema is
+    its own, and an unknown event type should still show up rather than vanish.
+    """
+    etype = str(event.get("type") or "event")
+    if etype in _SILENT_EVENTS:
+        return ""
+    stamp = f"{elapsed_s:.0f}s"
+    message = event.get("message") or {}
+    if etype == "message_end":
+        role = str(message.get("role") or "?")
+        if role == "assistant":
+            text = _content_text(message.get("content"))
+            usage = _usage_of(event) or {}
+            tokens = usage.get("totalTokens") or 0
+            calls = [b for b in (message.get("content") or []) if isinstance(b, dict) and b.get("type") != "text"]
+            return (f"[dim]{stamp}[/] assistant said {len(text)} chars"
+                    f"{f' ({len(calls)} tool call(s))' if calls else ''}{f', {tokens} tok' if tokens else ''}")
+        return f"[dim]{stamp}[/] {role} message"
+    if "tool" in etype:
+        name = event.get("name") or (event.get("tool") or {}).get("name") or message.get("name") or ""
+        return f"[dim]{stamp}[/] {etype.replace('_', ' ')}{f': {name}' if name else ''}"
+    return f"[dim]{stamp}[/] {etype.replace('_', ' ')}"
+
+
+def stream_agent(cmd: list[str], cwd: Path | None, timeout_s: int, model: str,
+                 log=None, quiet_s: float = 45.0, echo_text: bool = False) -> tuple[int, str, str]:
+    """Run an agent command, echoing progress as events land; returns (rc, stdout, stderr).
+
+    Shared with `sfactory backend`, which asks the agent one question and must
+    not look like it hung while a local GGUF loads — there, the answer is plain
+    text, so ``echo_text`` passes every line through instead of only the JSON
+    ones. Both pipes are drained on their own threads: pi writes warnings to
+    stderr, and a full stderr pipe would deadlock a worker that is otherwise fine.
+    """
+    import queue
+    import threading
+    import time
+
+    started = time.monotonic()
+    proc = _POPEN(
+        cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, errors="replace", bufsize=1, encoding="utf-8",
+    )
+    lines: queue.Queue[str | None] = queue.Queue()
+    err: list[str] = []
+
+    def pump() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            lines.put(line)
+        lines.put(None)
+
+    def drain_stderr() -> None:
+        assert proc.stderr is not None
+        err.extend(proc.stderr.readlines())
+
+    threading.Thread(target=pump, daemon=True).start()
+    threading.Thread(target=drain_stderr, daemon=True).start()
+
+    out: list[str] = []
+    last_sight = started
+    poll = min(5.0, max(0.05, quiet_s / 2))
+    while True:
+        now = time.monotonic()
+        if now - started > timeout_s:
+            proc.kill()
+            proc.wait()
+            minutes = timeout_s / 60
+            spent = f"{minutes:.0f} min" if minutes >= 1 else f"{timeout_s}s"
+            return (124, "".join(out), f"timed out after {spent} waiting for {model}")
+        if log and now - last_sight > quiet_s:
+            log(f"    │ … {now - started:.0f}s with no event — [bold]{model}[/] is "
+                "still reading the prompt; a local model spends most of the turn here")
+            last_sight = now
+        try:
+            line = lines.get(timeout=poll)
+        except queue.Empty:
+            continue
+        if line is None:
+            break
+        out.append(line)
+        last_sight = time.monotonic()
+        if not log:
+            continue
+        if not line.startswith("{"):
+            if echo_text and line.strip():
+                log(f"  │ {line.rstrip()[:300]}")
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        text = _describe(event, last_sight - started)
+        if text:
+            log(f"    │ {text}")
+    proc.wait()
+    return (proc.returncode or 0, "".join(out), "".join(err))
+
+
+def run_worker(brief_path: Path, config: FactoryConfig, cwd: Path, log=None) -> PiRun:
+    """Execute one element from a rendered brief; JSON events stream to us, live."""
     cmd = _base_command(config, config.harness.worker_mode)
     cmd.append(f"@{brief_path}")
     started = __import__("time").monotonic()
-    proc = subprocess.run(
-        cmd,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=config.harness.worker_timeout_min * 60,
-        check=False,
-        encoding="utf-8",
-        errors="replace",
-    )
-    run = _parse_events(proc.stdout or "")
-    run.returncode = proc.returncode
-    if not run.final_text and proc.stdout and not proc.stdout.lstrip().startswith("{"):
-        run.final_text = proc.stdout  # print-mode fallback
-    if proc.returncode != 0 and proc.stderr:
-        run.final_text = (run.final_text + "\n" + proc.stderr).strip()
+    rc, stdout, stderr = stream_agent(cmd, cwd, config.harness.worker_timeout_min * 60,
+                                      config.backend.model, log=log)
+    run = _parse_events(stdout)
+    run.returncode = rc
+    if not run.final_text and stdout and not stdout.lstrip().startswith("{"):
+        run.final_text = stdout  # print-mode fallback
+    if rc != 0 and stderr:
+        run.final_text = (run.final_text + "\n" + stderr).strip()
     run.duration_s = __import__("time").monotonic() - started
     return run
 

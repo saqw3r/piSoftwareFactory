@@ -239,6 +239,10 @@ def backend(
     provider: str = typer.Option("", "--provider", help="Provider id the agent knows this endpoint by."),
     login: bool = typer.Option(False, "--login", help="Hand the terminal to the agent's own login flow."),
     verify: bool = typer.Option(True, "--verify/--no-verify", help="Run one real prompt through the agent."),
+    verify_timeout_min: int = typer.Option(
+        0, "--verify-timeout-min",
+        help="Minutes the proof prompt may take (0 = [harness] verify_timeout_min; a local GGUF needs several).",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="No questions — take the defaults and the values passed."),
 ) -> None:
     """Choose the worker brain — pi/omp × local llama.cpp / OpenAI endpoint / subscription login."""
@@ -247,8 +251,8 @@ def backend(
 
     code = run_backend(
         root, harness=harness, source=source, base_url=base_url, model=model,
-        api_key_env=api_key_env, provider=provider, login=login, verify=verify, yes=yes,
-        log=console.print,
+        api_key_env=api_key_env, provider=provider, login=login, verify=verify,
+        verify_timeout_min=verify_timeout_min, yes=yes, log=console.print,
     )
     raise typer.Exit(code=code)
 

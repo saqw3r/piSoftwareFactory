@@ -259,6 +259,10 @@ def remedy(output: str, backend: Backend, harness: str = "pi") -> str:
     if "model" in lowered and ("not found" in lowered or "not offered" in lowered):
         return (f"{backend.model!r} is not offered by this endpoint — `sfactory backend` lists what it "
                 "does serve (note: a HF repo id is not a served model name)")
+    if "timed out" in lowered:
+        return (f"{backend.model!r} did not answer inside the budget — a local model spends most of it "
+                "reading the agent's system prompt, so raise [harness] worker_timeout_min or pick a "
+                "smaller/faster model with `sfactory backend --model <id>`")
     return ""
 
 

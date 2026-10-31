@@ -58,7 +58,7 @@ def _patch_dispatch(monkeypatch, tmp_path, run_worker_result):
     monkeypatch.setattr(dispatch, "ensure_lane", lambda root, config, lane: tmp_path)
     monkeypatch.setattr(dispatch, "_memories_for", lambda root, config, node: [])
     monkeypatch.setattr(dispatch, "write_brief", lambda dirpath, node, brief: Path("n001.md"))
-    monkeypatch.setattr(dispatch, "run_worker", lambda brief, config, cwd: run_worker_result)
+    monkeypatch.setattr(dispatch, "run_worker", lambda brief, config, cwd, log=None: run_worker_result)
     monkeypatch.setattr(dispatch, "hindsight", type("H", (), {"recall": staticmethod(lambda *a, **k: []),
                                                               "retain": staticmethod(lambda *a, **k: True)})())
     gates_called: list[bool] = []
