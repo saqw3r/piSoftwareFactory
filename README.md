@@ -195,10 +195,24 @@ backed up once on the first write) and updates the Paperclip seed's `harness`
 block. A failed check leaves `factory.toml` untouched and prints the agent's own
 error with the next command to run.
 
-Note on Paperclip: its adapter set is fixed and has no `omp` adapter, so with
+Note on Paperclip: its adapter set is fixed and no `omp` adapter, so with
 `--harness omp` the company's agents are hired on `pi_local` against the **same
 endpoint and model** (the command says so rather than pretending otherwise),
 while `sfactory run` / `sfactory wave` use omp.
+
+### What a run tells you (and what it refuses to claim)
+
+Each attempt names its brain — `<harness> worker (<model> @ <base_url>)` — and
+the token line reads pi's real per-message usage, so `~0in/0out tok` means the
+model spent nothing rather than "we couldn't count it". A node is `done` only
+when the lane actually diverged from its base ref: a commit ahead, or an edit
+outside `.factory/` (the worker's own brief lives in the lane and is not work).
+Three failures therefore stop the run with their own cause on the terminal:
+the agent died before answering (its error plus the fix), the model replied
+with an empty message (its name plus `sfactory backend --model <id>`), or git
+would not inspect the lane (`sfactory` trusts only the directory each call
+owns, so network-drive repos work; a residual refusal prints git's words and
+the `safe.directory` command that clears them).
 
 ### Project languages: changing the primary language
 
