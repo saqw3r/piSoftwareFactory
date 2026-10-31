@@ -60,15 +60,45 @@ DIFF-END
 """
 
 
+def _new_files(wt: Path, max_files: int = 5, max_lines: int = 120) -> str:
+    """Untracked files shown by content, because a worker may write and never commit.
+
+    For "produce a .md" the deliverable is exactly the file `git diff base...HEAD`
+    does not contain until someone commits it — and the reviewer was being handed
+    ``(no diff yet)`` over a finished document.
+    """
+    proc = gitcmd.run(wt, "status", "--porcelain", "--untracked-files=all", check=False)
+    if proc.returncode != 0:
+        return ""
+    blocks: list[str] = []
+    for line in proc.stdout.splitlines():
+        path = line[2:].strip().strip('"')
+        if not line.startswith("??") or path.startswith(".factory/"):
+            continue
+        try:
+            text = (wt / path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        lines = text.splitlines()
+        body = "\n".join(lines[:max_lines]) + ("\n… truncated …" if len(lines) > max_lines else "")
+        blocks.append(f"--- new file: {path}\n{body}")
+        if len(blocks) >= max_files:
+            break
+    return "\n".join(blocks)
+
+
 def lane_diff(root: Path, node: Node, main_branch: str) -> str:
-    """The lane's diff, or GitRefused.
+    """The lane's change — committed diff plus whatever the worker left uncommitted.
 
     An empty diff and a refused ``git diff`` used to be the same string here, and
-    the reviewer was handed ``(no diff yet)`` and asked to review it — which is
-    how a lane with no work got a verdict.
+    the reviewer was asked to review it — which is how a lane with no work got a
+    verdict.
     """
     proc = gitcmd.run(root, "diff", f"{main_branch}...HEAD")
-    diff = proc.stdout or ""
+    diff = (proc.stdout or "").strip()
+    uncommitted = _new_files(root)
+    if uncommitted:
+        diff = f"{diff}\n\n{uncommitted}".strip()
     if len(diff.splitlines()) > 400:  # context discipline (ADR-0010)
         lines = diff.splitlines()
         diff = "\n".join([*lines[:250], f"... [{len(lines) - 300} diff lines elided] ...", *lines[-50:]])
