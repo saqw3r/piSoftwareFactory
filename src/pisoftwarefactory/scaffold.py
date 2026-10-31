@@ -526,15 +526,19 @@ def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
     _write(root / "paperclip.company.json", Template(PAPERCLIP_COMPANY_JSON).render(**ctx), force, log)
 
     gitignore = root / ".gitignore"
-    entries = ".factory/run/\n.factory/worktrees/\n"
+    # `factory.toml` is the machine's brain: `sfactory backend` rewrites it with
+    # whatever model this box serves. Tracked, every provisioning run would leave
+    # the tree dirty and `sfactory release` would refuse it.
+    entries = ".factory/run/\n.factory/worktrees/\nfactory.toml\n"
     existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
     missing = "".join(e for e in entries.splitlines(keepends=True) if e not in existing)
     if missing:
         gitignore.write_text(existing + ("\n" if existing and not existing.endswith("\n") else "") + "# sfactory runtime state\n" + missing, encoding="utf-8")
-        log(f"  [green]wrote[/] {gitignore} (+ .factory/run/, .factory/worktrees/)")
+        log(f"  [green]wrote[/] {gitignore} (+ .factory/run/, .factory/worktrees/, factory.toml)")
 
     # Baseline commit AFTER scaffolding so the factory files themselves are
-    # committed (release refuses a dirty tree, and lane worktrees branch from it).
+    # committed (release refuses a dirty tree, and lane worktrees branch from it)
+    # — except what the ignore rules just retired on purpose.
     _ensure_baseline_commit(root, log)
 
     log("\n[bold]Factory scaffolded.[/]")
