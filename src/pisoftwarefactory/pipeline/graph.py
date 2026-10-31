@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 Kind = Literal["feature", "bug", "chore", "docs"]
 Risk = Literal["low", "standard", "high"]
-Status = Literal["intake", "ready", "dispatched", "gates", "review", "done", "released", "blocked"]
+Status = Literal["intake", "ready", "dispatched", "gates", "review", "done", "released", "blocked", "superseded"]
 
 
 class Node(BaseModel):
@@ -60,13 +60,18 @@ class Graph(BaseModel):
         raise KeyError(f"node {node_id!r} not in graph")
 
     def ready(self) -> list[Node]:
-        """Nodes whose blockers are all done/released and which await dispatch."""
-        done = {n.id for n in self.nodes if n.status in ("done", "released")}
+        """Nodes whose blockers are all settled and which await dispatch.
+
+        `superseded` settles a dependency the way `done` does — the work moved
+        elsewhere — but is never dispatched and never released. Leaving it out
+        would deadlock every node behind a duplicate someone retired by hand.
+        """
+        settled = {n.id for n in self.nodes if n.status in ("done", "released", "superseded")}
         return [
             n
             for n in self.nodes
             if n.status in ("intake", "ready")
-            and all(b in done for b in n.blockers)
+            and all(b in settled for b in n.blockers)
         ]
 
 

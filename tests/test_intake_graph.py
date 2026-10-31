@@ -36,3 +36,13 @@ def test_graph_ready_respects_blockers():
     assert [n.id for n in ready] == ["n002"]
     b.status = "done"
     assert [n.id for n in g.ready()] == ["n003"]
+
+
+def test_superseded_settles_a_blocker_without_becoming_work():
+    """A retired duplicate must not deadlock what waited on it (ADR-0010)."""
+    g = Graph()
+    g.add(Node(id="n001", title="dupe", task="dupe", status="superseded"))
+    after = g.add(Node(id="n002", title="b", task="b", blockers=["n001"]))
+    assert [n.id for n in g.ready()] == ["n002"]
+    after.status = "done"
+    assert g.ready() == []

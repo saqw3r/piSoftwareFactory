@@ -555,10 +555,13 @@ def status(
     console.print(table)
 
     # A blocked row without its reason sends the operator hunting; the reason
-    # was recorded by the pipeline that put the node there.
+    # was recorded by the pipeline that put the node there. A retired row says
+    # what retired it, so the graph reads as history rather than as a mystery.
     for n in graph.nodes:
         if n.status == "blocked":
             console.print(f"[red]{n.id} blocked[/] — {n.evidence or 'no reason recorded'}")
+        elif n.status == "superseded":
+            console.print(f"[dim]{n.id} superseded[/] — {n.evidence or 'no reason given'}")
 
     wt = gitcmd.run(root, "worktree", "list", check=False)
     console.print(f"worktrees:\n{wt.stdout.strip() or wt.stderr.strip() or '(none)'}")
