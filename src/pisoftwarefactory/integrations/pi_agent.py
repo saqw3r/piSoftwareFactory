@@ -49,6 +49,15 @@ def _tokens_from(usage: dict) -> tuple[int, int]:
     return int(inp), int(out)
 
 
+def _usage_of(event: dict) -> dict | None:
+    """pi nests token counts inside the message (``event.message.usage``); older
+    shapes carried them at the event root. One source per event, never both."""
+    for candidate in (event.get("usage"), (event.get("message") or {}).get("usage")):
+        if isinstance(candidate, dict):
+            return candidate
+    return None
+
+
 def _content_text(content: object) -> str:
     """pi message.content is a string or a list of blocks ({type:'text',text:...})."""
     if isinstance(content, str):
@@ -75,8 +84,8 @@ def _parse_events(stdout: str) -> PiRun:
             continue
         run.events.append(event)
 
-        usage = event.get("usage")
-        if isinstance(usage, dict):
+        usage = _usage_of(event)
+        if usage:
             inp, out = _tokens_from(usage)
             run.input_tokens += inp
             run.output_tokens += out
