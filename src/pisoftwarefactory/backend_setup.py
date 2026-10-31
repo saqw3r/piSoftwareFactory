@@ -40,13 +40,20 @@ _SOURCE_LABELS = {
 _VERIFY_TIMEOUT_SEC = 180
 
 
-def _run_stream(argv: list[str], log, timeout: int = _VERIFY_TIMEOUT_SEC) -> tuple[int, str]:
+def _run_stream(
+    argv: list[str],
+    log,
+    timeout: int = _VERIFY_TIMEOUT_SEC,
+    model: str = "the agent",
+) -> tuple[int, str]:
     """Run *argv*, echoing each line as it lands; returns (rc, captured output).
 
     Streaming is the point: a local model loading for a minute looks identical
     to a hang when nothing is printed, and the owner should see which it is.
+    The quiet-progress line names *model*, not argv[0] — the executable never
+    varies, the model does, and "which one is thinking" is the question.
     """
-    rc, out, errtext = stream_agent(argv, None, timeout, argv[0] if argv else "the agent",
+    rc, out, errtext = stream_agent(argv, None, timeout, model,
                                     log=log, quiet_s=30, echo_text=True)
     return (rc, out + errtext)
 
@@ -229,7 +236,7 @@ def _verify(harness: str, backend: Backend, log, runtime_key: bool = True, timeo
     log(f"  checking: {' '.join(argv[:5])} …")
     log(f"  [dim]budget {timeout_s // 60} min — a local GGUF spends most of it reading the "
         "agent's system prompt; raise [harness] verify_timeout_min if this box is slower[/]")
-    rc, output = _run_stream(argv, log, timeout=timeout_s)
+    rc, output = _run_stream(argv, log, timeout=timeout_s, model=backend.model)
     if rc == 124:
         log(f"  [red]no answer within {timeout_s}s[/] — {backend.model!r} at {backend.base_url} "
             "is slower than the budget, not necessarily broken")

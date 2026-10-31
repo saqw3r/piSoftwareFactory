@@ -24,7 +24,7 @@ def fake_harness(monkeypatch):
     monkeypatch.setattr(harnesses, "harness_models", lambda name: [])
     calls: list[list[str]] = []
 
-    def _stub_run_stream(argv, log, timeout=1):
+    def _stub_run_stream(argv, log, timeout=1, model="the agent"):
         calls.append(argv)
         log(f"  stub ran {argv[0]}")
         return (0, "OK")
@@ -82,7 +82,7 @@ def test_missing_credential_reports_the_login_command_and_changes_nothing(tmp_pa
     config = _project(tmp_path)
     before = (tmp_path / "factory.toml").read_text(encoding="utf-8")
 
-    def _failing(argv, log, timeout=1):
+    def _failing(argv, log, timeout=1, model="the agent"):
         return (1, "Error: No API key found for llamacpp")
 
     monkeypatch.setattr(backend_setup, "_run_stream", _failing)
@@ -174,3 +174,22 @@ def test_harness_not_on_path_says_which_one_to_install(tmp_path, monkeypatch):
     )
     assert code == 2
     assert any("omp not found on PATH" in m for m in msgs)
+
+
+def test_verify_names_the_model_not_the_executable(monkeypatch):
+    r"""The quiet-progress line is the operator's only company for minutes.
+
+    It used to print argv[0] — "C:\...\pi.CMD is still reading the prompt" —
+    which describes the harness, never changes, and answers nothing. The model
+    is the thing that is slow.
+    """
+    seen: dict = {}
+
+    def fake_stream_agent(cmd, cwd, timeout_s, model, log=None, quiet_s=30, echo_text=False):
+        seen["model"] = model
+        return (0, "OK", "")
+
+    monkeypatch.setattr(backend_setup, "stream_agent", fake_stream_agent)
+    backend_setup._run_stream([r"C:\Users\x\pi.CMD", "--model", "qwen3.5-9b"],
+                              lambda _m: None, timeout=5, model="qwen3.5-9b")
+    assert seen["model"] == "qwen3.5-9b"
