@@ -7,12 +7,13 @@ still fails is ``blocked`` with evidence — never marked done on agent claims.
 
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..config import FactoryConfig, load_config
 from ..gates import run_gates
+from ..gitcmd import GitRefused
+from ..gitcmd import run as _git
 from ..harnesses import remedy
 from ..integrations import hindsight
 from ..integrations.pi_agent import PiRun, run_worker
@@ -20,12 +21,6 @@ from .brief import render_brief, write_brief
 from .graph import Graph, Node
 
 WORKTREES = ".factory/worktrees"
-
-
-def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ("git", "-C", str(root), *args), capture_output=True, text=True, check=check
-    )
 
 
 def _resolve_base_ref(root: Path, config: FactoryConfig, log) -> str:
@@ -62,19 +57,14 @@ def ensure_lane(root: Path, config: FactoryConfig, lane: str, log=print) -> Path
         base_ref = _resolve_base_ref(root, config, log)
         try:
             _git(root, "worktree", "add", str(wt), "-b", f"lane/{lane}", base_ref)
-        except subprocess.CalledProcessError as exc:
-            err = ((exc.stderr or "") + "\n" + (exc.stdout or "")).strip()
+        except GitRefused as exc:
+            err = str(exc)
             if f"lane/{lane}" in err and "already exists" in err:
                 # Leftover branch from an earlier run — attach to it instead.
                 _git(root, "worktree", "add", str(wt), f"lane/{lane}")
                 return wt
             hint = ""
-            if "dubious ownership" in err:
-                # Forward slashes: git matches safe.directory literally and prints
-                # the path that way — a backslash entry may not match on Windows.
-                hint = ("\ngit distrusts this directory (network drive / copied dir). "
-                        f"Trust it once: git config --global --add safe.directory '{root.as_posix()}'")
-            elif "invalid reference" in err or "unknown revision" in err or "no such branch" in err:
+            if "invalid reference" in err or "unknown revision" in err or "no such branch" in err:
                 hint = (f"\nbase ref {config.lanes.base_ref!r} doesn't exist here — set the real "
                         "branch in factory.toml [lanes] base_ref (see `git branch --list`).")
             raise RuntimeError(f"cannot create lane worktree {lane}:\n{err}{hint}") from exc
@@ -104,16 +94,42 @@ def _memories_for(root: Path, config: FactoryConfig, node: Node) -> list[str]:
     )
 
 
-def _lane_produced_change(wt: Path, base_ref: str) -> bool:
-    """Did the worker actually leave work behind — a commit or an edit?
+def _is_bookkeeping(status_line: str) -> bool:
+    """The worker's own brief lives in the lane (``.factory/briefs/…``), so an
+    untouched lane always reports ``?? .factory/`` — that is scaffolding, not work."""
+    path = status_line[2:].strip().split(" -> ", 1)[0].strip('"')
+    return path.startswith(".factory/")
 
-    Gates passing on a lane identical to its base proves nothing; this is the
-    check that keeps an empty run from becoming a `done` node.
+
+def _lane_produced_change(wt: Path, base_ref: str) -> tuple[bool, str]:
+    """(work left behind, why that is unknowable) — a refused git call is not an empty lane.
+
+    Gates passing on a lane identical to its base prove nothing, but neither does
+    a blank ``git status`` when git actually declined to run; only the first is a
+    fact, so the second case travels with its own cause.
     """
-    ahead = _git(wt, "rev-list", "--count", f"{base_ref}..HEAD", check=False).stdout.strip()
-    if ahead.isdigit() and int(ahead) > 0:
-        return True
-    return bool(_git(wt, "status", "--porcelain", check=False).stdout.strip())
+    try:
+        ahead = _git(wt, "rev-list", "--count", f"{base_ref}..HEAD").stdout.strip()
+        if ahead.isdigit() and int(ahead) > 0:
+            return True, ""
+        status = _git(wt, "status", "--porcelain", "--untracked-files=all").stdout
+    except GitRefused as exc:
+        return False, str(exc)
+    edits = [line for line in status.splitlines() if line.strip() and not _is_bookkeeping(line)]
+    return bool(edits), ""
+
+
+def _why_nothing_changed(run: PiRun, config: FactoryConfig, log) -> None:
+    """rc=0 with an empty lane: show what the model actually said, right here."""
+    text = (run.final_text or "").strip()
+    if not text:
+        log(f"    [yellow]{config.harness.name} streamed no text and made no tool call[/] — "
+            f"{config.backend.model!r} answered with an empty message")
+        log("    that model cannot do the task. Pick one that can: `sfactory backend --model <id>`")
+        return
+    log("    what the agent said instead of changing the lane:")
+    for line in text.splitlines()[-8:]:
+        log(f"      │ {line[:300]}")
 
 
 def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, log=print) -> DispatchResult:
@@ -135,7 +151,8 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
             node, lane=lane, main_branch=config.release.main_branch, memories=memories, gate_feedback=gate_feedback
         )
         brief_path = write_brief(wt / ".factory" / "briefs", node, brief)
-        log(f"  [bold]{node.id}[/] attempt {attempt + 1}: {config.harness.name} worker on lane {lane} "
+        log(f"  [bold]{node.id}[/] attempt {attempt + 1}: {config.harness.name} worker "
+              f"({config.backend.model} @ {config.backend.base_url}) on lane {lane} "
               f"(brief={brief_path.name})")
         run = run_worker(brief_path, config, cwd=wt)
         worker_runs.append(run)
@@ -168,14 +185,19 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
         )
         log(f"    gates BLOCKED ({evidence}) — feeding output back to worker")
 
-    produced = _lane_produced_change(wt, _resolve_base_ref(root, config, log))
+    produced, refused = _lane_produced_change(wt, _resolve_base_ref(root, config, log))
     if worker_died:
         evidence = evidence or f"{config.harness.name} exited rc={worker_runs[-1].returncode} with no change"
+    elif refused:
+        evidence = f"the lane could not be inspected: {refused}"
+        log(f"    [red]cannot tell whether this lane holds work[/] — git refused, so nothing is "
+            f"being called done:\n      {refused}")
     elif gate_pass and not produced:
         evidence = "the agent finished cleanly but left no commit and no edit in the lane"
         log(f"    [red]{evidence}[/] — not marking it done")
+        _why_nothing_changed(worker_runs[-1], config, log)
     node.gate_status = "pass" if gate_pass else "blocked"
-    node.status = "done" if (gate_pass and produced and not worker_died) else "blocked"
+    node.status = "done" if (gate_pass and produced and not worker_died and not refused) else "blocked"
     node.touch()
     if gate_pass:
         hindsight.retain(

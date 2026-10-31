@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from pisoftwarefactory import gitcmd
 from pisoftwarefactory.config import FactoryConfig
 from pisoftwarefactory.integrations import pi_agent
 from pisoftwarefactory.pipeline import dispatch
@@ -91,7 +92,7 @@ def test_clean_worker_with_an_empty_lane_is_not_done(monkeypatch, tmp_path):
     _patch_dispatch(monkeypatch, tmp_path, ok)
     passing = [ProfileResult(language="python", steps=[StepResult(name="detect", status="passed")])]
     monkeypatch.setattr(dispatch, "run_gates", lambda wt, config, **k: passing)
-    monkeypatch.setattr(dispatch, "_lane_produced_change", lambda wt, base: False)
+    monkeypatch.setattr(dispatch, "_lane_produced_change", lambda wt, base: (False, ""))
     msgs: list[str] = []
     result = dispatch.dispatch_node(tmp_path, _node(), _config(), log=msgs.append)
 
@@ -99,17 +100,79 @@ def test_clean_worker_with_an_empty_lane_is_not_done(monkeypatch, tmp_path):
     assert any("no commit and no edit" in m for m in msgs)
 
 
+def test_silent_model_is_named_instead_of_left_mystery(monkeypatch, tmp_path):
+    """rc=0, empty lane, no text at all: say which model produced nothing."""
+    from pisoftwarefactory.gates import ProfileResult, StepResult
+
+    ok = pi_agent.PiRun(returncode=0)
+    _patch_dispatch(monkeypatch, tmp_path, ok)
+    passing = [ProfileResult(language="python", steps=[StepResult(name="detect", status="passed")])]
+    monkeypatch.setattr(dispatch, "run_gates", lambda wt, config, **k: passing)
+    monkeypatch.setattr(dispatch, "_lane_produced_change", lambda wt, base: (False, ""))
+    msgs: list[str] = []
+    config = FactoryConfig(harness={"name": "pi"}, backend={"model": "tiny-local-model"})
+    dispatch.dispatch_node(tmp_path, _node(), config, log=msgs.append)
+
+    text = "\n".join(msgs)
+    assert "empty message" in text
+    assert "tiny-local-model" in text
+    assert "sfactory backend --model" in text
+
+
+def test_refused_git_inspection_blocks_without_claiming_an_empty_lane(monkeypatch, tmp_path):
+    """A git that wouldn't run proves nothing; the node must not be called done."""
+    from pisoftwarefactory.gates import ProfileResult, StepResult
+
+    ok = pi_agent.PiRun(returncode=0)
+    _patch_dispatch(monkeypatch, tmp_path, ok)
+    passing = [ProfileResult(language="python", steps=[StepResult(name="detect", status="passed")])]
+    monkeypatch.setattr(dispatch, "run_gates", lambda wt, config, **k: passing)
+    refusal = "fatal: detected dubious ownership in repository at 'Z:/work/L1'"
+    monkeypatch.setattr(dispatch, "_lane_produced_change",
+                        lambda wt, base: (False, refusal))
+    msgs: list[str] = []
+    result = dispatch.dispatch_node(tmp_path, _node(), _config(), log=msgs.append)
+
+    assert result.node.status == "blocked"
+    assert "dubious ownership" in "\n".join(msgs)
+    assert "no commit and no edit" not in "\n".join(msgs)  # we never proved it was empty
+
+
 def test_lane_change_is_measured_by_commits_or_edits(monkeypatch, tmp_path):
-    def fake_git(_root, *args, **_k):
-        return type("R", (), {"stdout": {"rev-list": "0\n", "status": ""}[args[0]]})()
+    def fake_git(_root, cmd, *a, **_k):
+        return type("R", (), {"returncode": 0,
+                              "stdout": {"rev-list": "0\n", "status": ""}[cmd]})()
 
     monkeypatch.setattr(dispatch, "_git", fake_git)
-    assert dispatch._lane_produced_change(tmp_path, "main") is False
+    assert dispatch._lane_produced_change(tmp_path, "main") == (False, "")
 
-    monkeypatch.setattr(dispatch, "_git", lambda _root, cmd, *a, **k: type("R", (), {"stdout": "1\n"})())
-    assert dispatch._lane_produced_change(tmp_path, "main") is True
+    monkeypatch.setattr(dispatch, "_git", lambda _root, cmd, *a, **k: type(
+        "R", (), {"returncode": 0, "stdout": "1\n"})())
+    assert dispatch._lane_produced_change(tmp_path, "main") == (True, "")
 
     # No commit, but the agent left edits behind — still work worth reviewing.
     monkeypatch.setattr(dispatch, "_git", lambda _root, cmd, *a, **k: type(
-        "R", (), {"stdout": "0\n" if cmd == "rev-list" else " M file.cs\n"})())
-    assert dispatch._lane_produced_change(tmp_path, "main") is True
+        "R", (), {"returncode": 0, "stdout": "0\n" if cmd == "rev-list" else " M file.cs\n"})())
+    assert dispatch._lane_produced_change(tmp_path, "main") == (True, "")
+
+
+def test_the_brief_in_the_lane_is_not_counted_as_work(monkeypatch, tmp_path):
+    """The worker is handed .factory/briefs/<node>.md inside its own lane.
+
+    Untracked, always present — counting it would bless an untouched lane as a
+    change and put the false `done` right back.
+    """
+    monkeypatch.setattr(dispatch, "_git", lambda _root, cmd, *a, **k: type(
+        "R", (), {"returncode": 0,
+                  "stdout": "0\n" if cmd == "rev-list" else "?? .factory/briefs/n004.md\n"})())
+    assert dispatch._lane_produced_change(tmp_path, "main") == (False, "")
+
+
+def test_git_refusal_reports_its_own_cause(monkeypatch, tmp_path):
+    def refusing(_root, *a, **_k):
+        raise gitcmd.GitRefused("git rev-list failed (rc=128): fatal: detected dubious ownership")
+
+    monkeypatch.setattr(dispatch, "_git", refusing)
+    produced, reason = dispatch._lane_produced_change(tmp_path, "main")
+    assert produced is False
+    assert "dubious ownership" in reason
