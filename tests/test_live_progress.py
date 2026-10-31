@@ -101,6 +101,28 @@ def test_plain_text_answers_are_echoed_too(monkeypatch):
     assert "│ OK" in msgs[0]
 
 
+def test_partial_updates_are_folded_into_one_writing_line(monkeypatch):
+    """24 partial chunks must not become 24 lines.
+
+    Measured live: pi emits a `message_update` two or three times a second while
+    the model writes, so the terminal filled with identical text and the operator
+    could read nothing in it. Writing gets one line per cadence, carrying the count.
+    """
+    monkeypatch.setattr(pi_agent, "_WRITE_REPORT_SEC", -1.0)
+    _install(monkeypatch, FakeProc([
+        event(type="message_update", message={"content": [{"type": "text", "text": "he"}]}),
+        event(type="message_update", message={"content": [{"type": "text", "text": "hello"}]}),
+        event(type="message_update", message={"content": [{"type": "text", "text": "hello w"}]}),
+        event(type="agent_end"),
+    ]))
+    msgs: list[str] = []
+    stream_agent(["pi"], None, 30, "qwen3.5-9b", log=msgs.append)
+
+    assert sum("is writing" in m for m in msgs) == 3
+    assert "3 partial update(s)" in msgs[-2]
+    assert not any(m.strip().endswith("message update") for m in msgs)
+
+
 def test_describe_survives_an_unknown_event():
     assert "weird thing" in _describe({"type": "weird_thing"}, 12.0)
 

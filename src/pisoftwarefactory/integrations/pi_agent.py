@@ -138,6 +138,11 @@ def _base_command(config: FactoryConfig, mode: str) -> list[str]:
 
 _SILENT_EVENTS = frozenset({"session", "message_start", "turn_start", "entry_appended", "agent_settled"})
 
+# pi emits a `message_update` for every partial chunk — two or three per second
+# while it writes. A line for each is a wall of identical text that says less
+# than the one line it replaces, so writing is reported on this cadence instead.
+_WRITE_REPORT_SEC = 15.0
+
 
 def _describe(event: dict, elapsed_s: float) -> str:
     """One line per meaningful agent event, so a long turn is not confused with a hang.
@@ -203,6 +208,8 @@ def stream_agent(cmd: list[str], cwd: Path | None, timeout_s: int, model: str,
 
     out: list[str] = []
     last_sight = started
+    writes = 0
+    last_write_report = started
     poll = min(5.0, max(0.05, quiet_s / 2))
     while True:
         now = time.monotonic()
@@ -233,6 +240,13 @@ def stream_agent(cmd: list[str], cwd: Path | None, timeout_s: int, model: str,
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
+            continue
+        if event.get("type") == "message_update":
+            writes += 1
+            if last_sight - last_write_report > _WRITE_REPORT_SEC:
+                log(f"    │ {last_sight - started:.0f}s [bold]{model}[/] is writing — "
+                    f"{writes} partial update(s)")
+                last_write_report = last_sight
             continue
         text = _describe(event, last_sight - started)
         if text:
