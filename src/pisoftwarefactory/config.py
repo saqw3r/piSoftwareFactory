@@ -51,9 +51,9 @@ class Backend(BaseModel):
 
 
 class Harness(BaseModel):
-    """Worker/reviewer harness settings (ADR-0002: pi coding agent)."""
+    """Worker/reviewer coding agent (ADR-0002, ADR-0017: pi or omp — same shape)."""
 
-    name: Literal["pi"] = "pi"
+    name: Literal["pi", "omp"] = "pi"
     worker_mode: Literal["json", "print"] = "json"
     review_mode: Literal["print", "json"] = "print"
     worker_timeout_min: int = 40

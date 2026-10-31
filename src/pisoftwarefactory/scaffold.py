@@ -9,8 +9,6 @@ importable.
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -24,6 +22,7 @@ from .config import (
     save_config,
 )
 from .gate_profiles import detect_languages
+from .harnesses import register_provider
 
 # --------------------------------------------------------------------------
 # Scaffolded file templates
@@ -441,52 +440,18 @@ def _probe_backend(config: FactoryConfig, log) -> None:
         log(f"  [yellow]backend probe failed[/] ({exc}); keeping defaults")
 
 
-def _ensure_pi_provider(config: FactoryConfig, log) -> None:
-    """Register the backend provider in pi's agent directory (ADR-0002).
+def _detect_base_ref(root: Path) -> str:
+    """The repo's real default branch for ``lanes.base_ref`` (main vs master vs other).
 
-    pi loads ``models.json`` from ``<agent-dir>`` only (``~/.pi/agent`` by
-    default, ``PI_CODING_AGENT_DIR`` to override) — a project-local
-    ``.pi/models.json`` is ignored, so the provider must be merged there.
-    The original file is backed up once before the first modification.
-
-    Generalized URL + key: ``api_key_env`` empty → mocked ``"none"``
-    (llama.cpp default); otherwise the env var value is written so pi can
-    authenticate (e.g. OpenAI). The secret itself never lands in factory.toml.
+    Reads the current symref, so it works on fresh (`git init -b …`) and
+    existing repos alike; falls back to `main` when git can't say.
     """
-    agent_dir = Path(os.environ.get("PI_CODING_AGENT_DIR", Path.home() / ".pi" / "agent"))
-    models_path = agent_dir / "models.json"
-    provider = config.backend.provider
-    api_key = config.backend.resolve_api_key()
-    provider_block = {
-        "baseUrl": config.backend.base_url,
-        "api": config.backend.api,
-        "apiKey": api_key,
-        "models": [{"id": config.backend.model}],
-    }
-    try:
-        existing = json.loads(models_path.read_text(encoding="utf-8")) if models_path.is_file() else None
-    except json.JSONDecodeError:
-        existing = None
-        log(f"  [yellow]{models_path} is not valid JSON; it will be replaced (backup kept)")
-
-    if existing and existing.get("providers", {}).get(provider) == provider_block:
-        log(f"  [green]pi provider ok[/] {provider} → {config.backend.base_url} ({models_path})")
-        return
-
-    if config.backend.api_key_env and api_key == "none":
-        log(f"  [yellow]${config.backend.api_key_env} is not set[/] — wrote placeholder key for provider {provider!r}; export it before dispatching")
-
-    if existing is None:
-        new_data: dict = {"providers": {provider: provider_block}}
-    else:
-        if not models_path.with_suffix(".json.bak").exists():
-            shutil.copy2(models_path, models_path.with_suffix(".json.bak"))
-        new_data = existing
-        new_data.setdefault("providers", {})[provider] = provider_block
-
-    agent_dir.mkdir(parents=True, exist_ok=True)
-    models_path.write_text(json.dumps(new_data, indent=2) + "\n", encoding="utf-8")
-    log(f"  [green]pi provider registered[/] {provider} → {config.backend.base_url} in {models_path}")
+    proc = subprocess.run(
+        ("git", "-C", str(root), "branch", "--show-current"),
+        capture_output=True, text=True,
+    )
+    name = proc.stdout.strip()
+    return name if proc.returncode == 0 and name else "main"
 
 
 def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
@@ -511,10 +476,11 @@ def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
     config = FactoryConfig(
         auto=auto,
         languages=languages,
+        lanes={"base_ref": _detect_base_ref(root)},
         memory={"bank_id": root.name.lower().replace(" ", "-")},
     )
     _probe_backend(config, log)
-    _ensure_pi_provider(config, log)
+    register_provider(config.harness.name, config.backend, log)
 
     ctx = {
         "project_name": root.name,
