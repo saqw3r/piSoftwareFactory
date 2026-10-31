@@ -259,6 +259,30 @@ npx paperclipai run             # if the server isn't up afterwards
   Without Paperclip, `sfactory` itself is the orchestrator — the management
   layer is purely optional.
 
+#### Lifetime, artifacts, and reuse
+
+- `sfactory services setup` **finishes and gives you the prompt back** — both
+  servers start detached (they survive terminal close; no second window
+  needed, and no pop-up window — output goes to the log files). The command
+  waits until each answers — up to ~4 min for Hindsight (first start builds
+  its embedded store) and ~5 min for Paperclip (first run downloads
+  packages) — then exits with `started` / `already-running` /
+  `starting — not responding yet` per service. If a server process dies
+  instead, setup stops waiting immediately and prints the last log lines.
+  In the `starting` case give it more time and check `.factory/run/*.log`;
+  the server may still come up.
+- **Per project** (goes away if you delete the scaffold): `.factory/run/` —
+  `hindsight.pid/.log`, `paperclip.pid/.log`. `services stop` works from the
+  project that started them (it reads these pidfiles); other projects still
+  report the servers as `up` via URL checks.
+- **Shared and reusable across projects:**
+  - Hindsight binary lives in an isolated uv tool env; its data store lives
+    outside any project, and memory banks are keyed by project directory name
+    — re-scaffolding the same project name reuses its memories, a new project
+    gets a fresh bank on the same server.
+  - Paperclip is one global instance at `~/.paperclip/instances/default`,
+    shared by all projects; setup never modifies an existing instance.
+
 ### Troubleshooting
 
 - **`sfactory` not recognized** → open a new terminal after `uv tool install`

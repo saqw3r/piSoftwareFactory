@@ -27,12 +27,56 @@ def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
     )
 
 
-def ensure_lane(root: Path, config: FactoryConfig, lane: str) -> Path:
-    """Create the lane worktree + ``lane/<name>`` branch if missing; returns its path."""
+def _resolve_base_ref(root: Path, config: FactoryConfig, log) -> str:
+    """Configured base ref, or the repo's real default when it's missing.
+
+    Repos default to `main` or `master` (and scaffolded ones to whatever was
+    current at init); insisting on exactly the configured name turns a fresh
+    checkout into a support call. Fall back visibly, never silently.
+    """
+    wanted = config.lanes.base_ref
+    if _git(root, "rev-parse", "--verify", wanted, check=False).returncode == 0:
+        return wanted
+    candidates = ["main", "master"]
+    current = _git(root, "branch", "--show-current", check=False).stdout.strip()
+    if current and current not in candidates:
+        candidates.append(current)
+    for candidate in candidates:
+        if candidate != wanted and _git(root, "rev-parse", "--verify", candidate, check=False).returncode == 0:
+            log(f"  [yellow]base ref {wanted!r} missing — using {candidate!r} instead[/] "
+                "(set [lanes] base_ref to silence this)")
+            return candidate
+    return wanted  # nothing valid: let worktree add fail with the clear error below
+
+
+def ensure_lane(root: Path, config: FactoryConfig, lane: str, log=print) -> Path:
+    """Create the lane worktree + ``lane/<name>`` branch if missing; returns its path.
+
+    Git failures are re-raised with stderr attached: a bare CalledProcessError
+    hides the real cause (dubious ownership, missing base ref, stale branch).
+    """
     wt = root / WORKTREES / lane
     if not (wt / ".git").exists():
         (root / WORKTREES).mkdir(parents=True, exist_ok=True)
-        _git(root, "worktree", "add", str(wt), "-b", f"lane/{lane}", config.lanes.base_ref)
+        base_ref = _resolve_base_ref(root, config, log)
+        try:
+            _git(root, "worktree", "add", str(wt), "-b", f"lane/{lane}", base_ref)
+        except subprocess.CalledProcessError as exc:
+            err = ((exc.stderr or "") + "\n" + (exc.stdout or "")).strip()
+            if f"lane/{lane}" in err and "already exists" in err:
+                # Leftover branch from an earlier run — attach to it instead.
+                _git(root, "worktree", "add", str(wt), f"lane/{lane}")
+                return wt
+            hint = ""
+            if "dubious ownership" in err:
+                # Forward slashes: git matches safe.directory literally and prints
+                # the path that way — a backslash entry may not match on Windows.
+                hint = ("\ngit distrusts this directory (network drive / copied dir). "
+                        f"Trust it once: git config --global --add safe.directory '{root.as_posix()}'")
+            elif "invalid reference" in err or "unknown revision" in err or "no such branch" in err:
+                hint = (f"\nbase ref {config.lanes.base_ref!r} doesn't exist here — set the real "
+                        "branch in factory.toml [lanes] base_ref (see `git branch --list`).")
+            raise RuntimeError(f"cannot create lane worktree {lane}:\n{err}{hint}") from exc
     return wt
 
 
