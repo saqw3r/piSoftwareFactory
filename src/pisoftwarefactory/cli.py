@@ -343,7 +343,7 @@ def run(
         reflect(root, config, graph, f"{node.id} blocked by gates", incident="gate failure loop exhausted")
         save_graph(root, graph)
         commit_graph(root)
-        err.print(f"node {node.id} BLOCKED — {result.evidence or 'no evidence recorded'}")
+        err.print(f"node {node.id} BLOCKED — {result.evidence}")
         raise typer.Exit(code=1)
 
     console.print("review: fresh-context reviewer reading the lane diff…")
@@ -352,15 +352,24 @@ def run(
     if node.verdict == "blockers":
         node.status = "blocked"
         node.gate_status = "pass"
+        node.evidence = f"review verdict blockers: {(node.notes or '')[:600]}"
         save_graph(root, graph)
         reflect(root, config, graph, f"{node.id} blocked in review", incident="review verdict: blockers")
         err.print(f"node {node.id} got verdict `blockers` — looped back for a human look")
         raise typer.Exit(code=1)
+    if not node.verdict:
+        # `verdict=n/a` read like a property of the run; it is a failure of the
+        # review, and the reviewer's own words are the only clue to what it saw.
+        node.evidence = f"reviewer returned no verdict: {(node.notes or '(empty answer)')[:600]}"
+        console.print("  [yellow]no verdict parsed[/] — the reviewer answered without one, so this "
+                      "change is [bold]unreviewed[/] (gates passed, lane diverged)")
+        for line in (node.notes or "").strip().splitlines()[-6:]:
+            console.print(f"      │ {line[:300]}")
 
     save_graph(root, graph)
     commit_graph(root)
-    reflect(root, config, graph, f"{node.id} completed: {node.title} (verdict {node.verdict or 'n/a'})")
-    console.print(f"[green]done[/] {node.id} `{node.title}` verdict={node.verdict or 'n/a'}")
+    reflect(root, config, graph, f"{node.id} completed: {node.title} (verdict {node.verdict or 'none'})")
+    console.print(f"[green]done[/] {node.id} `{node.title}` verdict={node.verdict or 'none (unreviewed)'}")
     # "done" without saying where the work sits is the question asked next.
     console.print(f"  work: branch [bold]lane/{node.lane}[/] in {wt}")
     console.print(f"  merge: `sfactory release` assembles stage; `sfactory release --approve` moves {config.release.main_branch}")
@@ -405,9 +414,11 @@ def wave(
     commit_graph(root)
 
     done = [r.node.id for r in results if r.node.status == "done"]
-    blocked = [r.node.id for r in results if r.node.status == "blocked"]
-    reflect(root, config, graph, f"wave dispatched: done={done or '—'} blocked={blocked or '—'}")
+    blocked = [r.node for r in results if r.node.status == "blocked"]
+    reflect(root, config, graph, f"wave dispatched: done={done or '—'} blocked=[n.id for n in blocked] or '—'")
     console.print(f"wave complete: [green]{len(done)} done[/], [red]{len(blocked)} blocked[/]")
+    for node in blocked:
+        console.print(f"  [red]{node.id}[/] — {node.evidence or 'no reason recorded'}")
 
 
 @app.command()
@@ -537,6 +548,12 @@ def status(
     for n in graph.nodes:
         table.add_row(n.id, n.title[:48], n.kind, n.risk, n.lane, n.status, n.gate_status or "—", n.verdict or "—")
     console.print(table)
+
+    # A blocked row without its reason sends the operator hunting; the reason
+    # was recorded by the pipeline that put the node there.
+    for n in graph.nodes:
+        if n.status == "blocked":
+            console.print(f"[red]{n.id} blocked[/] — {n.evidence or 'no reason recorded'}")
 
     wt = gitcmd.run(root, "worktree", "list", check=False)
     console.print(f"worktrees:\n{wt.stdout.strip() or wt.stderr.strip() or '(none)'}")

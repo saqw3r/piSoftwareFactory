@@ -187,26 +187,38 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
 
     produced, refused = _lane_produced_change(wt, _resolve_base_ref(root, config, log))
     if worker_died:
-        evidence = evidence or f"{config.harness.name} exited rc={worker_runs[-1].returncode} with no change"
+        last = worker_runs[-1]
+        # Its own words are the diagnosis; "rc=1" alone sends the operator guessing.
+        evidence = evidence or (f"{config.harness.name} exited rc={last.returncode}"
+                                f" with no change: {(last.final_text or '').strip()[:400] or 'it said nothing'}")
     elif refused:
         evidence = f"the lane could not be inspected: {refused}"
         log(f"    [red]cannot tell whether this lane holds work[/] — git refused, so nothing is "
             f"being called done:\n      {refused}")
     elif gate_pass and not produced:
-        evidence = "the agent finished cleanly but left no commit and no edit in the lane"
+        evidence = (f"the agent finished cleanly but left no commit and no edit in the lane "
+                    f"({config.harness.name} + {config.backend.model})")
         log(f"    [red]{evidence}[/] — not marking it done")
         _why_nothing_changed(worker_runs[-1], config, log)
+    elif not gate_pass and gate_feedback:
+        # The summary says which language blocked; the operator also needs what
+        # the gate said, and the worker's retry already got this text.
+        evidence = f"{evidence}\n{gate_feedback[:1000]}"
     node.gate_status = "pass" if gate_pass else "blocked"
     node.status = "done" if (gate_pass and produced and not worker_died and not refused) else "blocked"
+    # The reason outlives the terminal: `sfactory status` and `sfactory wave`
+    # both read it off the graph days later, when nobody has the scrollback.
+    node.evidence = "" if node.status == "done" else (evidence or "blocked without a recorded reason")
     node.touch()
-    if gate_pass:
+    if gate_pass and node.status == "done":
         hindsight.retain(
             config.memory.hindsight_url,
             config.memory.bank_id or root.name.lower().replace(" ", "-"),
             f"Element {node.id} ({node.kind}, lane {lane}) completed and passed gates.",
             context="factory dispatch",
         )
-    return DispatchResult(node=node, worker_runs=worker_runs, gate_pass=gate_pass, verdict=node.status, evidence=evidence if not gate_pass else "")
+    return DispatchResult(node=node, worker_runs=worker_runs, gate_pass=gate_pass, verdict=node.status,
+                          evidence="" if node.status == "done" else node.evidence)
 
 
 def dispatch_wave(root: Path, graph: Graph, config: FactoryConfig, log=print) -> list[DispatchResult]:

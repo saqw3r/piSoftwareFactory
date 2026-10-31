@@ -83,6 +83,23 @@ def test_dead_worker_is_blocked_with_its_own_error_and_never_reaches_gates(monke
     assert "the agent died before the model answered" in text
     assert "No API key found for llamacpp" in text  # the cause, inline — no log file to open
     assert "fix:" in text and "/login" in text
+    # …and the reason survives the scrollback, for `sfactory status` later.
+    assert "No API key found for llamacpp" in result.node.evidence
+    assert "No API key found for llamacpp" in result.evidence
+
+
+def test_a_real_change_with_passing_gates_is_done_and_holds_no_reason(monkeypatch, tmp_path):
+    from pisoftwarefactory.gates import ProfileResult, StepResult
+
+    ok = pi_agent.PiRun(returncode=0, input_tokens=10, output_tokens=5)
+    _patch_dispatch(monkeypatch, tmp_path, ok)
+    passing = [ProfileResult(language="python", steps=[StepResult(name="detect", status="passed")])]
+    monkeypatch.setattr(dispatch, "run_gates", lambda wt, config, **k: passing)
+    monkeypatch.setattr(dispatch, "_lane_produced_change", lambda wt, base: (True, ""))
+    result = dispatch.dispatch_node(tmp_path, _node(), _config(), log=lambda _m: None)
+
+    assert result.node.status == "done"
+    assert (result.node.evidence, result.evidence) == ("", "")
 
 
 def test_clean_worker_with_an_empty_lane_is_not_done(monkeypatch, tmp_path):

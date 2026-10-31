@@ -31,6 +31,7 @@ class Node(BaseModel):
     status: str = "intake"
     verdict: str = ""  # clean | nits | blockers (review stage)
     gate_status: str = ""  # pass | blocked | "" (not yet run)
+    evidence: str = ""  # why it is blocked, in the pipeline's own words
     files: list[str] = Field(default_factory=list)
     blockers: list[str] = Field(default_factory=list)
     provider: str = ""  # jev | heuristic (intake evidence)
