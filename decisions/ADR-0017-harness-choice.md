@@ -50,6 +50,10 @@ for omp at `~/.omp/agent/models.yml` — so the two are one writer apart.
   and pi's key for a custom endpoint must arrive as `--api-key` at runtime —
   which is why `pi /login` was never required for local llama.cpp, while
   Paperclip's `pi_local` (no flag) still needs a stored credential.
+- A registry model id is **what goes on the wire**, so both harnesses store the
+  served name (`qwen3.5-9b`); the `provider/` prefix is selection syntax only and
+  is added on omp's command line. Proven live: an omp registry of
+  `llamacpp/qwen3.5-9b` reached llama-router verbatim and answered 400.
 - Per-role harness mixing (omp worker + pi reviewer) is not supported yet —
   `[harness]` stays one value per project.
 - `harness-login` skips provider registration on purpose: a subscription

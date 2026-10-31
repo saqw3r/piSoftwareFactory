@@ -30,11 +30,13 @@ def test_pi_registry_is_json_with_bare_model_id(tmp_path):
     assert "created" in "".join(log)
 
 
-def test_omp_registry_is_yaml_with_prefixed_model_id(tmp_path):
+def test_omp_registry_is_yaml_and_holds_the_served_model_id(tmp_path):
+    """The registry id goes on the wire verbatim — `llamacpp/x` makes llama-router 400."""
     harnesses.register_provider("omp", _backend(), log=lambda _m: None)
     path = tmp_path / "omp-agent" / "models.yml"
     block = yaml.safe_load(path.read_text(encoding="utf-8"))["providers"]["llamacpp"]
-    assert block["models"] == [{"id": "llamacpp/qwen3.5-9b"}]
+    assert block["models"] == [{"id": "qwen3.5-9b"}]
+    assert harnesses.selectable_model_id("omp", _backend()) == "llamacpp/qwen3.5-9b"
 
 
 def test_second_run_is_a_no_op_and_keeps_the_file(tmp_path):

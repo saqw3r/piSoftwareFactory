@@ -75,7 +75,15 @@ def registry_path(name: str) -> Path:
 
 
 def provider_block(backend: Backend) -> dict:
-    """The harness-side view of ``[backend]``: URL + key + one model id."""
+    """The harness-side view of ``[backend]``: URL + key + the id the server serves.
+
+    The registry stores the model name exactly as the endpoint answers to it —
+    it is what the harness puts on the wire. The ``provider/`` prefix some
+    harnesses want on the command line is selection, not identity; see
+    :func:`selectable_model_id`. (Proven live: an omp registry id of
+    ``llamacpp/qwen3.5-9b`` reaches llama-router verbatim and it answers 400
+    "model not found".)
+    """
     return {
         "baseUrl": backend.base_url,
         "api": backend.api,
@@ -90,7 +98,11 @@ def _harness_key_style(name: str) -> str:
 
 
 def selectable_model_id(name: str, backend: Backend) -> str:
-    """The model id as this harness expects it on the command line / in its registry."""
+    """The model as this harness wants it *on the command line*.
+
+    omp selects `provider/id`; pi is given `--provider` and the bare id. The
+    registry itself always stores the served id — see :func:`provider_block`.
+    """
     if _harness_key_style(name) == "provider/id" and "/" not in backend.model:
         return f"{backend.provider}/{backend.model}"
     return backend.model
@@ -125,8 +137,7 @@ def register_provider(name: str, backend: Backend, log=print) -> str:
     parse raises with the fix; nothing is written blind over it.
     """
     path = registry_path(name)
-    block = dict(provider_block(backend))
-    block["models"] = [{"id": selectable_model_id(name, backend)}]
+    block = provider_block(backend)
 
     data = registry_load(name)
     providers = (data or {}).get("providers") if data is not None else None
