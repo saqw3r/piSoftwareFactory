@@ -144,6 +144,21 @@ _SILENT_EVENTS = frozenset({"session", "message_start", "turn_start", "entry_app
 _WRITE_REPORT_SEC = 15.0
 
 
+def _tool_names(blocks: list) -> str:
+    """The tools a turn called, deduped — "" when the event carries no names.
+
+    "3 tool call(s)" does not tell the operator why the lane is still empty; the
+    names do. ``write``/``edit`` in there means the deliverable is being produced,
+    ``read``/``grep`` in there means the model is still orienting itself.
+    """
+    names: list[str] = []
+    for block in blocks:
+        name = str(block.get("name") or "")
+        if name and name not in names:
+            names.append(name)
+    return ", ".join(names)
+
+
 def _describe(event: dict, elapsed_s: float) -> str:
     """One line per meaningful agent event, so a long turn is not confused with a hang.
 
@@ -162,8 +177,14 @@ def _describe(event: dict, elapsed_s: float) -> str:
             usage = _usage_of(event) or {}
             tokens = usage.get("totalTokens") or 0
             calls = [b for b in (message.get("content") or []) if isinstance(b, dict) and b.get("type") != "text"]
-            return (f"[dim]{stamp}[/] assistant said {len(text)} chars"
-                    f"{f' ({len(calls)} tool call(s))' if calls else ''}{f', {tokens} tok' if tokens else ''}")
+            shown = f"{len(calls)} tool call(s)"
+            named = _tool_names(calls)
+            if calls and named:
+                shown = f"{shown}: {named}"
+            tail = f" ({shown})" if calls else ""
+            if tokens:
+                tail = f"{tail}, {tokens} tok"
+            return f"[dim]{stamp}[/] assistant said {len(text)} chars{tail}"
         return f"[dim]{stamp}[/] {role} message"
     if "tool" in etype:
         name = event.get("name") or (event.get("tool") or {}).get("name") or message.get("name") or ""

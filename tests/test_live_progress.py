@@ -74,7 +74,7 @@ def test_each_streamed_event_becomes_one_progress_line(monkeypatch):
     rc, out, _err = stream_agent(["pi"], Path("."), 30, "qwen3.5-9b", log=msgs.append)
 
     assert rc == 0
-    assert "assistant said 20 chars (1 tool call(s)), 47096 tok" in "\n".join(msgs)
+    assert "assistant said 20 chars (1 tool call(s): read), 47096 tok" in "\n".join(msgs)
     assert "tool execution end: read" in "\n".join(msgs)
     assert not any("session" in m for m in msgs)  # bookkeeping events stay silent
     assert out.count("\n") == 7
@@ -125,6 +125,24 @@ def test_partial_updates_are_folded_into_one_writing_line(monkeypatch):
 
 def test_describe_survives_an_unknown_event():
     assert "weird thing" in _describe({"type": "weird_thing"}, 12.0)
+
+
+def test_tool_calls_are_named_not_just_counted():
+    """Measured live: a worker made 26 tool calls and the terminal never said which.
+
+    "3 tool call(s)" cannot answer the only question that matters while the lane
+    stays empty — is it writing the deliverable, or reading the repo again?
+    """
+    line = _describe({"type": "message_end", "message": {
+        "role": "assistant",
+        "content": [{"type": "toolCall", "name": "read"}, {"type": "toolCall", "name": "write"},
+                    {"type": "toolCall", "name": "read"}],
+    }}, 480.0)
+    assert "3 tool call(s): read, write" in line
+
+    # A schema that carries no names still reports the count it always did.
+    assert "1 tool call(s)" in _describe({"type": "message_end", "message": {
+        "role": "assistant", "content": [{"type": "toolCall"}]}}, 10.0)
 
 
 def test_worker_timeout_blocks_with_a_budget_fix(monkeypatch, tmp_path):
