@@ -44,3 +44,17 @@ def test_run_update_missing_metadata_reports(monkeypatch):
     seen: list[str] = []
     assert run_update(log=seen.append) == 1
     assert any("direct_url" in s for s in seen)
+
+
+def test_reported_version_is_the_built_version():
+    """Live: the release bump went into pyproject and `sfactory --version` kept
+    reporting the old number — the operator could not tell which build was running.
+    """
+    import tomllib
+    from pathlib import Path
+
+    import pisoftwarefactory
+
+    with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as fh:
+        built = tomllib.load(fh)["project"]["version"]
+    assert built == pisoftwarefactory.__version__
