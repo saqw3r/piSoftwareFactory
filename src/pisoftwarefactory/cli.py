@@ -110,7 +110,7 @@ def _review_or_die(root: Path, node, config, wt: Path) -> None:  # node: pipelin
     from .pipeline.review import review_node
 
     try:
-        review_node(root, node, config, cwd=wt)
+        review_node(root, node, config, cwd=wt, log=console.print)
     except GitRefused as exc:
         err.print(f"[red]review could not read the lane diff[/] — {node.id} stays unreviewed")
         err.print(str(exc))
@@ -408,7 +408,7 @@ def wave(
             continue
         wt = root / ".factory" / "worktrees" / node.lane
         try:
-            review_node(root, node, config, cwd=wt)
+            review_node(root, node, config, cwd=wt, log=console.print)
         except GitRefused as exc:
             # One unreadable lane doesn't cancel the rest of the wave's reviews.
             console.print(f"[red]{node.id} unreviewed[/] — the lane diff could not be read\n{exc}")
@@ -455,6 +455,14 @@ def review(
     console.print(f"review {target.id}: [{style}]{target.verdict or 'no verdict parsed'}[/]")
     if target.notes:
         console.print(target.notes)
+    if not target.verdict:
+        # "no verdict" printed and exit 0 read as a review that found nothing wrong.
+        # It is a review that never happened, and the change ships unreviewed.
+        err.print(f"  [red]unreviewed[/] — the reviewer answered without a verdict, so this "
+                  "diff has no reviewer opinion on it. The text above is what it actually "
+                  f"said; re-run `sfactory review {target.id}`, or fix the backend with "
+                  "`sfactory backend` if it answered nothing.")
+        raise typer.Exit(code=1)
 
 
 @app.command()

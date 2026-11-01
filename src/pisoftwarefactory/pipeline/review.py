@@ -105,7 +105,8 @@ def lane_diff(root: Path, node: Node, main_branch: str) -> str:
     return diff
 
 
-def review_node(root: Path, node: Node, config: FactoryConfig, cwd: Path | None = None) -> Node:
+def review_node(root: Path, node: Node, config: FactoryConfig, cwd: Path | None = None,
+                log=None) -> Node:
     diff = lane_diff(cwd or root, node, config.release.main_branch)
     prompt = REVIEW_PROMPT.format(
         title=node.title,
@@ -117,7 +118,11 @@ def review_node(root: Path, node: Node, config: FactoryConfig, cwd: Path | None 
     # Small local models sample inconsistently; a no-verdict response is
     # retried once with a fresh context before being reported as such.
     for attempt in range(2):
-        run = run_reviewer(prompt, config, cwd=cwd or root)
+        if log:
+            log(f"  reviewer turn {attempt + 1}: {config.harness.name} reading "
+                f"{len(diff or '')} chars of diff ({config.backend.model} @ "
+                f"{config.backend.provider if config.backend.agent_credential else config.backend.base_url})")
+        run = run_reviewer(prompt, config, cwd=cwd or root, log=log)
         node.verdict = parse_verdict(run.final_text or "")
         node.notes = (run.final_text or "")[-2000:]
         if node.verdict:

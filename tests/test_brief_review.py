@@ -87,3 +87,51 @@ def test_a_committed_change_is_not_duplicated_as_a_new_file(monkeypatch, tmp_pat
     monkeypatch.setattr(review.gitcmd, "run", fake_git)
     diff = review.lane_diff(tmp_path, _node(), "main")
     assert "--- new file" not in diff
+
+
+def test_the_reviewer_streams_instead_of_looking_hung(monkeypatch, tmp_path):
+    """Live: `sfactory review n002` printed one line, then four minutes of nothing.
+
+    The reviewer ran `subprocess.run(capture_output=True)`, so every event the
+    agent emitted stayed in a pipe until the turn ended.
+    """
+    from pisoftwarefactory.config import FactoryConfig
+    from pisoftwarefactory.integrations import pi_agent
+
+    def fake_run_reviewer(prompt, config, cwd, timeout_min=15, log=None):
+        assert log is not None, "the reviewer must get the operator's log"
+        log("    │ 12s assistant said 0 chars (2 tool call(s): read)")
+        return pi_agent.PiRun(returncode=0, final_text="Verdict: clean", duration_s=12.0)
+
+    monkeypatch.setattr(review, "run_reviewer", fake_run_reviewer)
+    monkeypatch.setattr(review, "lane_diff", lambda *a, **k: "diff body")
+    msgs: list[str] = []
+    node = review.review_node(tmp_path, _node(), FactoryConfig(), cwd=tmp_path, log=msgs.append)
+
+    assert node.verdict == "clean"
+    text = "\n".join(msgs)
+    assert "reviewer turn 1" in text and "9 chars of diff" in text
+    assert "assistant said 0 chars" in text
+
+
+def test_a_review_without_a_verdict_is_not_a_successful_command(monkeypatch, tmp_path):
+    """It printed `review n010: no verdict parsed` and exited 0 — an unreviewed
+    change that `sfactory release` would ship as if a reviewer had cleared it."""
+    from typer.testing import CliRunner
+
+    from pisoftwarefactory.cli import app
+    from pisoftwarefactory.pipeline.graph import Graph, Node, save_graph
+    from pisoftwarefactory.scaffold import run_init
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="demo"\n', encoding="utf-8")
+    run_init(target=tmp_path, auto=True, langs="python", force=False, log=print)
+    graph = Graph()
+    graph.add(Node(id="n010", title="the thing", task="do it", status="done", lane="L1"))
+    save_graph(tmp_path, graph)
+    monkeypatch.setattr("pisoftwarefactory.cli._review_or_die",
+                        lambda root, node, config, wt: None)
+
+    result = CliRunner().invoke(app, ["review", "n010", "--root", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "unreviewed" in result.output

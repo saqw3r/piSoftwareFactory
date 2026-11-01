@@ -332,23 +332,23 @@ def run_worker(brief_path: Path, config: FactoryConfig, cwd: Path, log=None) -> 
     return run
 
 
-def run_reviewer(prompt: str, config: FactoryConfig, cwd: Path, timeout_min: int = 15) -> PiRun:
-    """Fresh-context read-only review (verdict expected in the final text)."""
+def run_reviewer(prompt: str, config: FactoryConfig, cwd: Path, timeout_min: int = 15,
+                 log=None) -> PiRun:
+    """Fresh-context read-only review (verdict expected in the final text).
+
+    Streams through the same pump as the worker: a review that prints nothing for
+    four minutes is indistinguishable from a hang, and the reviewer is the one
+    stage nobody can inspect, so it has to narrate itself.
+    """
     cmd = _base_command(config, config.harness.review_mode)
     cmd.append(prompt)
     started = __import__("time").monotonic()
-    proc = subprocess.run(
-        cmd,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        timeout=timeout_min * 60,
-        check=False,
-        encoding="utf-8",
-        errors="replace",
-    )
-    run = _parse_events(proc.stdout or "")
-    run.returncode = proc.returncode
-    run.final_text = proc.stdout.strip() if proc.stdout else (proc.stderr or "").strip()
+    rc, stdout, stderr = stream_agent(cmd, cwd, timeout_min * 60, config.backend.model,
+                                      log=log, echo_text=True,
+                                      agent_credential=config.backend.agent_credential,
+                                      provider=config.backend.provider)
+    run = _parse_events(stdout)
+    run.returncode = rc
+    run.final_text = stdout.strip() if stdout else (stderr or "").strip()
     run.duration_s = __import__("time").monotonic() - started
     return run
