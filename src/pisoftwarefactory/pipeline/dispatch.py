@@ -139,6 +139,16 @@ def _lane_state(wt: Path, base_ref: str) -> LaneState:
 def _why_nothing_changed(run: PiRun, config: FactoryConfig, log) -> None:
     """rc=0 with an empty lane: show what the model actually said, right here."""
     text = (run.final_text or "").strip()
+    calls = ", ".join(run.tool_calls)
+    if not text and calls:
+        # Work happened, then the model went quiet — a different illness from a
+        # model that never answers, and it needs saying before "pick another model".
+        log(f"    [yellow]{config.harness.name} called {calls} and then streamed nothing "
+            "back[/] — every later retry answered empty")
+        log(f"    the lane holds no file and no commit, so nothing was delivered — re-run the "
+            f"task ({config.harness.name} + {config.backend.model} may answer next time), or "
+            "pick a model that finishes: `sfactory backend --model <id>`")
+        return
     if not text:
         log(f"    [yellow]{config.harness.name} streamed no text and made no tool call[/] — "
             f"{config.backend.model!r} answered with an empty message")

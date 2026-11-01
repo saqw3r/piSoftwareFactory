@@ -182,6 +182,37 @@ def test_an_agent_that_still_wont_commit_after_being_asked_is_blocked_once(monke
     assert "after being asked once to commit them" in result.node.evidence
 
 
+def test_a_worker_that_worked_then_went_quiet_is_not_blamed_on_silence(monkeypatch, tmp_path):
+    """Live freeflow run: a `bash` call at 20s, then four empty auto-retries.
+
+    Counting only the last message called that "answered with an empty message —
+    pick another model", which is true of a different illness and hides the one
+    that actually happened: the agent started the work and lost the thread.
+    """
+    from pisoftwarefactory.gates import ProfileResult, StepResult
+
+    bash = {"type": "message_end", "message": {"role": "assistant", "content": [
+        {"type": "toolCall", "name": "bash", "args": {"command": "ls"}}]}}
+    quiet = {"type": "message_end", "message": {"role": "assistant", "content": []}}
+    run = pi_agent.PiRun(returncode=0, events=[bash, quiet, quiet])
+    assert run.tool_calls == ("bash",)
+
+    _patch_dispatch(monkeypatch, tmp_path, run)
+    passing = [ProfileResult(language="python", steps=[StepResult(name="detect", status="passed")])]
+    monkeypatch.setattr(dispatch, "run_gates", lambda wt, config, **k: passing)
+    monkeypatch.setattr(dispatch, "_lane_state", lambda wt, base: dispatch.LaneState())
+    msgs: list[str] = []
+    config = FactoryConfig(harness={"name": "pi"},
+                           backend={"provider": "freeflow", "model": "ovh-free/gpt-oss-120b"})
+    result = dispatch.dispatch_node(tmp_path, _node(), config, log=msgs.append)
+
+    text = "\n".join(msgs)
+    assert result.node.status == "blocked"
+    assert "called bash and then streamed nothing back" in text
+    assert "made no tool call" not in text
+    assert "re-run the task" in text and "sfactory backend --model" in text
+
+
 def test_clean_worker_with_an_empty_lane_is_not_done(monkeypatch, tmp_path):
     from pisoftwarefactory.gates import ProfileResult, StepResult
 

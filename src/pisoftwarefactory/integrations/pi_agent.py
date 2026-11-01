@@ -39,6 +39,27 @@ class PiRun:
     def ok(self) -> bool:
         return self.returncode == 0
 
+    @property
+    def tool_calls(self) -> tuple[str, ...]:
+        """Every tool the agent called across the whole run, first use first.
+
+        ``final_text`` is only the last thing it *said*; a run that worked and then
+        went quiet looks identical to one that never started unless the calls are
+        counted over all messages, not the final one.
+        """
+        names: list[str] = []
+        for event in self.events:
+            if event.get("type") != "message_end":
+                continue
+            message = event.get("message") or {}
+            if message.get("role") != "assistant":
+                continue
+            for name in _tool_names([b for b in (message.get("content") or [])
+                                     if isinstance(b, dict) and b.get("type") != "text"]).split(", "):
+                if name and name not in names:
+                    names.append(name)
+        return tuple(names)
+
 
 def _tokens_from(usage: dict) -> tuple[int, int]:
     """Best-effort token extraction from any usage-shaped dict.
