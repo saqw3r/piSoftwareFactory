@@ -189,6 +189,23 @@ Sources: `llama-local` (your endpoint, mocked key — the default),
 The model list comes from the live endpoint first, so you pick from what actually
 answers; if the endpoint is silent, the agent's own catalog is used.
 
+A provider the agent logs into itself is not an endpoint, so it gets no key at
+all — the mocked `--api-key none` that a local llama.cpp needs is exactly what
+makes a keyless provider answer 401. `sfactory backend --source harness-login`
+records that (`agent_credential = true`), skips the `/v1/models` probe, and
+verifies with one real prompt instead:
+
+```powershell
+pi install npm:pi-freeflow                    # the extension serves the provider itself
+sfactory backend --harness pi --source harness-login `
+         --provider freeflow --model ovh-free/gpt-oss-120b --verify-timeout-min 3
+sfactory run "…"                              # every turn now goes through pi's own auth
+```
+
+`sfactory backend` reads `provider_not_found` from pi's own auth check as "pi
+keeps no credential for this provider" and proves the setup with the prompt
+instead of opening a login it cannot satisfy.
+
 Nothing to edit by hand: the same command merges the provider into the harness's
 registry (`~/.pi/agent/models.json` for pi, `~/.omp/agent/models.yml` for omp —
 backed up once on the first write) and updates the Paperclip seed's `harness`
