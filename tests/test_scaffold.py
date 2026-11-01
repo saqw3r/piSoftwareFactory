@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from pisoftwarefactory.config import load_config
+from pisoftwarefactory.config import load_config, save_config
 from pisoftwarefactory.scaffold import run_init
 
 
@@ -70,3 +70,62 @@ def test_init_rejects_unknown_language(tmp_path):
         assert "cobol" in str(exc)
     else:
         raise AssertionError("expected SystemExit")
+
+
+def test_init_does_not_reset_the_machines_own_settings(tmp_path, monkeypatch):
+    """The bug this pins: re-running `init` silently reverted a chosen backend.
+
+    `sfactory init` built a fresh FactoryConfig, so the operator's model and the
+    time budgets sized to that box were replaced by defaults — and the next run
+    went back to a model that answers with an empty message.
+    """
+    _seed_project(tmp_path)
+    from pisoftwarefactory.integrations.llama import BackendInfo
+
+    monkeypatch.setattr("pisoftwarefactory.integrations.llama.probe_backend",
+                        lambda url: BackendInfo(base_url=url, models=["other", "qwen3.5-9b"],
+                                                context_window=262144))
+    run_init(target=tmp_path, auto=False, langs="", force=False, log=lambda _m: None)
+    cfg = load_config(tmp_path)
+    cfg.backend.model = "qwen3.5-9b"
+    cfg.harness.worker_timeout_min = 120
+    save_config(cfg, tmp_path)
+
+    run_init(target=tmp_path, auto=False, langs="", force=False, log=lambda _m: None)
+    after = load_config(tmp_path)
+    assert after.backend.model == "qwen3.5-9b"
+    assert after.harness.worker_timeout_min == 120
+    # detection still wins where it is the better authority
+    assert sorted(after.languages) == ["go", "python"]
+
+
+def test_probe_keeps_a_model_the_endpoint_serves(monkeypatch):
+    from pisoftwarefactory import scaffold
+    from pisoftwarefactory.config import FactoryConfig
+    from pisoftwarefactory.integrations.llama import BackendInfo
+
+    msgs: list[str] = []
+    monkeypatch.setattr("pisoftwarefactory.integrations.llama.probe_backend",
+                        lambda url: BackendInfo(base_url=url, models=["zzz-first", "qwen3.5-9b"],
+                                                context_window=65536))
+    config = FactoryConfig(backend={"model": "qwen3.5-9b"})
+    scaffold._probe_backend(config, msgs.append)
+
+    assert config.backend.model == "qwen3.5-9b", "models[0] must not win over a served model"
+    assert "is served" in msgs[0]
+
+
+def test_probe_replaces_only_a_model_nobody_serves(monkeypatch):
+    from pisoftwarefactory import scaffold
+    from pisoftwarefactory.config import FactoryConfig
+    from pisoftwarefactory.integrations.llama import BackendInfo
+
+    msgs: list[str] = []
+    monkeypatch.setattr("pisoftwarefactory.integrations.llama.probe_backend",
+                        lambda url: BackendInfo(base_url=url, models=["only-model"], context_window=None))
+    config = FactoryConfig(backend={"model": "gone-model"})
+    scaffold._probe_backend(config, msgs.append)
+
+    assert config.backend.model == "only-model"
+    assert any("is not served" in m for m in msgs)
+    assert any("sfactory backend --model" in m for m in msgs)

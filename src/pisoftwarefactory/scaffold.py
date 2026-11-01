@@ -20,6 +20,7 @@ from .config import (
     FactoryConfig,
     Language,
     bank_id_for,
+    load_config,
     save_config,
 )
 from .gate_profiles import detect_languages
@@ -421,16 +422,31 @@ def _ensure_baseline_commit(root: Path, log) -> None:
 
 
 def _probe_backend(config: FactoryConfig, log) -> None:
-    """Fill the real model id from the live llama.cpp server (ADR-0010)."""
+    """Ask the live llama.cpp endpoint what it serves (ADR-0010).
+
+    The serve list is information, not a preference. Taking ``models[0]``
+    unconditionally replaced a model the operator had chosen and verified with
+    whatever the router happens to list first — which is how a provisioned box
+    silently went back to a model that answers with an empty message.
+    """
     try:
         from .integrations.llama import probe_backend
 
         info = probe_backend(config.backend.base_url)
-        if info.models:
-            config.backend.model = info.models[0]
         if info.context_window:
             config.backend.context_window = info.context_window
-        log(f"  [green]probed[/] backend {config.backend.base_url} → model={config.backend.model} ctx={config.backend.context_window}")
+        if not info.models:
+            log(f"  [yellow]{config.backend.base_url} listed no models[/] — keeping "
+                f"{config.backend.model!r}; verify it with `sfactory backend --verify`")
+            return
+        if config.backend.model in info.models:
+            log(f"  [green]probed[/] {config.backend.base_url} → {config.backend.model} is served "
+                f"({len(info.models)} model(s)) ctx={config.backend.context_window}")
+            return
+        log(f"  [yellow]{config.backend.model!r} is not served by {config.backend.base_url}[/] — "
+            f"switching to {info.models[0]} so this run has a brain at all. "
+            f"Pick deliberately: `sfactory backend --model <id>` ({len(info.models)} listed)")
+        config.backend.model = info.models[0]
     except Exception as exc:  # noqa: BLE001
         log(f"  [yellow]backend probe failed[/] ({exc}); keeping defaults")
 
@@ -465,12 +481,25 @@ def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
         languages = detect_languages(root)
         log(f"languages (detected): {languages or 'none — gates will skip until files appear'}")
 
-    config = FactoryConfig(
-        auto=auto,
-        languages=languages,
-        lanes={"base_ref": _detect_base_ref(root)},
-        memory={"bank_id": root.name.lower().replace(" ", "-")},
-    )
+    # Re-running `init` on a provisioned box must not forget what that box was
+    # told: the backend choice, the time budgets sized to its hardware, the gate
+    # steps. Detection still wins where detection is the better authority — the
+    # languages in the repo and the branch lanes actually branch from.
+    existed = (root / "factory.toml").is_file()
+    config = load_config(root) if existed else FactoryConfig()
+    updates: dict = {
+        "languages": languages,
+        "lanes": config.lanes.model_copy(update={"base_ref": _detect_base_ref(root)}),
+        "memory": config.memory.model_copy(
+            update={"bank_id": config.memory.bank_id or root.name.lower().replace(" ", "-")}),
+    }
+    if auto or not existed:
+        updates["auto"] = auto
+    config = config.model_copy(update=updates)
+    if existed:
+        log(f"  [dim]kept[/] the machine's own config — backend={config.backend.model}, "
+            f"worker budget={config.harness.worker_timeout_min} min, "
+            f"auto={config.auto} (pass --auto to change it)")
     _probe_backend(config, log)
     register_provider(config.harness.name, config.backend, log)
 
