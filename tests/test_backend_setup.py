@@ -217,6 +217,8 @@ def test_a_keyless_agent_provider_is_never_given_the_mocked_key(tmp_path, fake_h
     assert fake_harness[-1][:4] == ["pi", "--provider", "freeflow", "--model"]
     assert handovers == []
     assert "keyless" in " ".join(msgs)
+    # the budget line explains the right slowness: this backend is not a GGUF
+    assert "local GGUF" not in " ".join(msgs) and "free tier" in " ".join(msgs)
     assert code == 0
     assert load_config(tmp_path).backend.agent_credential is True
 

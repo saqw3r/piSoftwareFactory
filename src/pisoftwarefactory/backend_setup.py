@@ -240,8 +240,12 @@ def _verify(harness: str, backend: Backend, log, runtime_key: bool = True, timeo
     """One real prompt through the agent — the only proof that counts."""
     argv = harnesses.verify_argv(harness, backend, runtime_key=runtime_key)
     log(f"  checking: {' '.join(argv[:5])} …")
-    log(f"  [dim]budget {timeout_s // 60} min — a local GGUF spends most of it reading the "
-        "agent's system prompt; raise [harness] verify_timeout_min if this box is slower[/]")
+    slow = (f"budget {timeout_s // 60} min — a local GGUF spends most of it reading the "
+            "agent's system prompt; raise [harness] verify_timeout_min if this box is slower"
+            if not backend.agent_credential else
+            f"budget {timeout_s // 60} min on {backend.provider} — the answer should land in "
+            "seconds; a timeout here means the free tier is throttling or the id is dead")
+    log(f"  [dim]{slow}[/]")
     rc, output = _run_stream(argv, log, timeout=timeout_s, model=backend.model)
     if rc == 124:
         # Naming base_url for a provider the agent serves itself points the operator
