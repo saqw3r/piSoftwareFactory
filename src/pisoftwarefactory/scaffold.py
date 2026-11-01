@@ -428,7 +428,15 @@ def _probe_backend(config: FactoryConfig, log) -> None:
     unconditionally replaced a model the operator had chosen and verified with
     whatever the router happens to list first — which is how a provisioned box
     silently went back to a model that answers with an empty message.
+
+    Not every backend is an endpoint: a provider the agent logs into itself
+    (freeflow, a subscription) has no ``/v1/models`` to ask, and probing the
+    leftover local URL would replace a working cloud model with a GGUF.
     """
+    if config.backend.agent_credential:
+        log(f"  [dim]kept[/] {config.backend.model!r} on provider {config.backend.provider!r} — "
+            "the agent authenticates it, so there is no endpoint to probe")
+        return
     try:
         from .integrations.llama import probe_backend
 

@@ -129,3 +129,31 @@ def test_probe_replaces_only_a_model_nobody_serves(monkeypatch):
     assert config.backend.model == "only-model"
     assert any("is not served" in m for m in msgs)
     assert any("sfactory backend --model" in m for m in msgs)
+
+
+def test_init_does_not_probe_a_backend_the_agent_authenticates(tmp_path, monkeypatch):
+    """A cloud/keyless backend has no /v1/models: probing the leftover local URL
+    and taking its first entry would swap a working provider back to a GGUF."""
+    _seed_project(tmp_path)
+    from pisoftwarefactory.integrations.llama import BackendInfo
+
+    probed: list[str] = []
+
+    def fake_probe(url):
+        probed.append(url)
+        return BackendInfo(base_url=url, models=["qwen3.5-9b"], context_window=262144)
+
+    monkeypatch.setattr("pisoftwarefactory.integrations.llama.probe_backend", fake_probe)
+    run_init(target=tmp_path, auto=False, langs="", force=False, log=lambda _m: None)
+    cfg = load_config(tmp_path)
+    cfg.backend.provider = "freeflow"
+    cfg.backend.model = "ovh-free/gpt-oss-120b"
+    cfg.backend.agent_credential = True
+    save_config(cfg, tmp_path)
+    probed.clear()  # the first init ran against the default llama-local backend, legitimately
+
+    run_init(target=tmp_path, auto=False, langs="", force=False, log=lambda _m: None)
+    after = load_config(tmp_path)
+    assert probed == []
+    assert (after.backend.provider, after.backend.model, after.backend.agent_credential) == (
+        "freeflow", "ovh-free/gpt-oss-120b", True)
