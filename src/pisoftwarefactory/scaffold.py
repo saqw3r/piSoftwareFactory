@@ -470,6 +470,28 @@ def _detect_base_ref(root: Path) -> str:
     return name if proc.returncode == 0 and name else "main"
 
 
+def _detect_main_branch(root: Path, fallback: str) -> str:
+    """The branch releases merge into — which is not always the one checked out.
+
+    ``release.main_branch`` used to stay at the shipped default while lanes
+    branched from whatever the repo really called its trunk. On a `master` repo
+    that meant every review and release died on `unknown revision 'main'`, and
+    the operator found out only after the worker had already spent a turn.
+    """
+    origin = gitcmd.run(root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD",
+                        check=False)
+    name = origin.stdout.strip().removeprefix("origin/")
+    if origin.returncode == 0 and name:
+        return name
+    listed = gitcmd.run(root, "branch", "--list", "main", "master", check=False).stdout
+    for candidate in ("main", "master"):
+        if candidate in listed:
+            return candidate
+    # Nothing names a trunk here, so keep what is configured — an operator may
+    # have set a branch that exists, and detection has no authority to disagree.
+    return fallback
+
+
 def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
     """Scaffold the factory into *target* (ADR-0012)."""
     root = target.resolve()
@@ -495,9 +517,14 @@ def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
     # languages in the repo and the branch lanes actually branch from.
     existed = (root / "factory.toml").is_file()
     config = load_config(root) if existed else FactoryConfig()
+    main_branch = _detect_main_branch(root, config.release.main_branch)
+    if main_branch != config.release.main_branch:
+        log(f"  release merges into [bold]{main_branch}[/] — the branch this repo actually has "
+            f"(was {config.release.main_branch!r}; review and release read diffs against it)")
     updates: dict = {
         "languages": languages,
         "lanes": config.lanes.model_copy(update={"base_ref": _detect_base_ref(root)}),
+        "release": config.release.model_copy(update={"main_branch": main_branch}),
         "memory": config.memory.model_copy(
             update={"bank_id": config.memory.bank_id or root.name.lower().replace(" ", "-")}),
     }

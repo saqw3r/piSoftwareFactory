@@ -157,3 +157,25 @@ def test_init_does_not_probe_a_backend_the_agent_authenticates(tmp_path, monkeyp
     assert probed == []
     assert (after.backend.provider, after.backend.model, after.backend.agent_credential) == (
         "freeflow", "ovh-free/gpt-oss-120b", True)
+
+
+def test_init_targets_the_branch_the_repo_actually_has(tmp_path):
+    """A `master` repo must not be told to release into a `main` that never existed.
+
+    Live: review and release both read `git diff main...HEAD`, so the first
+    worker turn on a provisioned box ended in "unknown revision" — after the
+    model had already been paid for the work.
+    """
+    import subprocess
+
+    _seed_project(tmp_path)
+    subprocess.run(("git", "-C", str(tmp_path), "init", "-b", "master", "-q"), check=True)
+    subprocess.run(("git", "-C", str(tmp_path), "add", "-A"), check=True)
+    subprocess.run(("git", "-C", str(tmp_path), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "seed"), check=True)
+    msgs: list[str] = []
+
+    run_init(target=tmp_path, auto=True, langs="python", force=False, log=msgs.append)
+
+    assert load_config(tmp_path).release.main_branch == "master"
+    assert any("release merges into" in m and "master" in m for m in msgs)
