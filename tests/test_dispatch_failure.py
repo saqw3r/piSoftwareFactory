@@ -130,6 +130,58 @@ def test_an_uncommitted_deliverable_is_not_done_because_release_merges_commits(m
     assert "ARCHITECTURE.md" in result.node.evidence
 
 
+def test_an_uncommitted_deliverable_gets_one_attempt_to_make_the_commit(monkeypatch, tmp_path):
+    """The work is done and only the commit is missing — ask for the commit, don't give up.
+
+    Marking it blocked here is honest but wasteful: the file exists in the lane and
+    nothing stands between it and a release except one `git commit` the worker owns.
+    """
+    from pisoftwarefactory.gates import ProfileResult, StepResult
+
+    ok = pi_agent.PiRun(returncode=0, input_tokens=10, output_tokens=5)
+    _patch_dispatch(monkeypatch, tmp_path, ok)
+    passing = [ProfileResult(language="python", steps=[StepResult(name="detect", status="passed")])]
+    monkeypatch.setattr(dispatch, "run_gates", lambda wt, config, **k: passing)
+
+    lanes = iter([dispatch.LaneState(edits=("README.md",)),
+                  dispatch.LaneState(edits=("README.md",), committed=True),
+                  dispatch.LaneState(edits=("README.md",), committed=True)])
+    monkeypatch.setattr(dispatch, "_lane_state", lambda wt, base: next(lanes))
+    briefs: list[str] = []
+    monkeypatch.setattr(dispatch, "write_brief",
+                        lambda dirpath, node, brief: briefs.append(brief) or Path("n001.md"))
+    msgs: list[str] = []
+    result = dispatch.dispatch_node(tmp_path, _node(), _config(), log=msgs.append)
+
+    assert result.node.status == "done"
+    text = "\n".join(msgs)
+    assert "sit uncommitted" in text
+    # the second brief says only "commit these", not "start over"
+    assert 'the gates PASSED and the files are already written ("README.md")' in briefs[1]
+    assert 'git add -- "README.md"' in briefs[1]
+
+
+def test_an_agent_that_still_wont_commit_after_being_asked_is_blocked_once(monkeypatch, tmp_path):
+    """One ping, not a retry loop burning a full local-GGUF turn per attempt."""
+    from pisoftwarefactory.gates import ProfileResult, StepResult
+
+    ok = pi_agent.PiRun(returncode=0, input_tokens=10, output_tokens=5)
+    _patch_dispatch(monkeypatch, tmp_path, ok)
+    passing = [ProfileResult(language="python", steps=[StepResult(name="detect", status="passed")])]
+    monkeypatch.setattr(dispatch, "run_gates", lambda wt, config, **k: passing)
+    monkeypatch.setattr(dispatch, "_lane_state",
+                        lambda wt, base: dispatch.LaneState(edits=("README.md",)))
+    runs: list[int] = []
+    monkeypatch.setattr(dispatch, "run_worker",
+                        lambda brief, config, cwd, log=None: runs.append(1) or ok)
+    msgs: list[str] = []
+    result = dispatch.dispatch_node(tmp_path, _node(), _config(), log=msgs.append)
+
+    assert len(runs) == 2  # the work, then the commit — and no third attempt
+    assert result.node.status == "blocked"
+    assert "after being asked once to commit them" in result.node.evidence
+
+
 def test_clean_worker_with_an_empty_lane_is_not_done(monkeypatch, tmp_path):
     from pisoftwarefactory.gates import ProfileResult, StepResult
 

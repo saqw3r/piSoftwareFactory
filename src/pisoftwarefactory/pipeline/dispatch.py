@@ -149,6 +149,16 @@ def _why_nothing_changed(run: PiRun, config: FactoryConfig, log) -> None:
         log(f"      │ {line[:300]}")
 
 
+def _commit_feedback(edits: tuple[str, ...], node: Node) -> str:
+    """The worker did the work and forgot the commit — say only that, with the command."""
+    quoted = " ".join(f'"{p}"' for p in edits[:8])
+    return (f"the gates PASSED and the files are already written ({quoted}); the lane holds "
+            f"no commit, so release would drop this work. Do nothing except commit exactly "
+            f"these files: git add -- {quoted} && GIT_EDITOR=true git commit -m "
+            f'"{node.id}: {node.title[:60]}" && git show --stat HEAD. '
+            "Do not rewrite, extend or add any other file.")
+
+
 def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, log=print) -> DispatchResult:
     """Run one node through Execute → Gates (with bounded retries)."""
     root = root.resolve()
@@ -162,6 +172,10 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
     gate_pass = False
     worker_died = False
     evidence = ""
+    base_ref = _resolve_base_ref(root, config, log)
+    # Gates passing with the deliverable still uncommitted is one fixable mistake,
+    # not a verdict — so the worker gets exactly one attempt to make the commit.
+    commit_pinged = False
 
     for attempt in range(config.harness.max_retries + 1):
         brief = render_brief(
@@ -197,7 +211,15 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
             f"{r.language}:{'pass' if r.passed else 'BLOCKED'}" for r in results
         )
         if gate_pass:
-            break
+            state = _lane_state(wt, base_ref)
+            if state.committed or state.refusal or not state.edits or commit_pinged:
+                break
+            commit_pinged = True
+            gate_feedback = _commit_feedback(state.edits, node)
+            log(f"    gates passed, but {len(state.edits)} file(s) sit uncommitted "
+                f"({', '.join(state.edits[:8])}) — release merges commits, so the worker "
+                "gets one attempt to make it")
+            continue
         gate_feedback = "\n".join(
             f"[{r.language}] " + "\n".join(f"{s.name}: {s.status}\n{s.detail}" for s in r.steps if s.status != "passed")
             for r in results
@@ -205,7 +227,7 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
         )
         log(f"    gates BLOCKED ({evidence}) — feeding output back to worker")
 
-    state = _lane_state(wt, _resolve_base_ref(root, config, log))
+    state = _lane_state(wt, base_ref)
     if worker_died:
         last = worker_runs[-1]
         # Its own words are the diagnosis; "rc=1" alone sends the operator guessing.
@@ -222,8 +244,9 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
         _why_nothing_changed(worker_runs[-1], config, log)
     elif gate_pass and not state.committed:
         left = ", ".join(state.edits[:8])
-        evidence = (f"the agent wrote {len(state.edits)} file(s) and committed none of them "
-                    f"({left}) — release merges commits, so this would be dropped without a trace")
+        asked = " (after being asked once to commit them)" if commit_pinged else ""
+        evidence = (f"the agent wrote {len(state.edits)} file(s) and committed none of them{asked}"
+                    f" ({left}) — release merges commits, so this would be dropped without a trace")
         log(f"    [red]{evidence}[/] — not marking it done")
         add = " ".join(f'"{p}"' for p in state.edits[:8])
         log(f'    to keep the work: git -C "{wt}" add -- {add} && '

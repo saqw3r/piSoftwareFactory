@@ -32,7 +32,7 @@ BRIEF_TEMPLATE = """\
 {% endfor %}
 {% endif %}
 {% if gate_feedback %}
-## Previous gate failure (fix this first)
+## Previous attempt — what the factory said (fix this first)
 
 ```
 {{ gate_feedback }}
