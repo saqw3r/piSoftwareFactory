@@ -23,6 +23,18 @@ def test_brief_contains_contract_and_feedback():
     assert "lane `L2`" in text
 
 
+def test_brief_demands_a_file_not_a_chat_answer():
+    """Measured: a worker spent 950 s streaming its deliverable as chat text and
+    was cut off by the budget with nothing written. The brief said where the work
+    goes nowhere, so the model answered instead of producing the file."""
+    node = Node(id="n010", title="architecture view, output should be .md",
+                task="Generate me architecture view in C4 model. Output should be .md file")
+    text = render_brief(node, lane="L1", main_branch="main")
+
+    assert "The deliverable is a file you wrote and committed" in text
+    assert "never an answer pasted into\n   chat" in text
+
+
 def test_parse_verdict_variants():
     assert parse_verdict("Verdict: clean") == "clean"
     assert parse_verdict("**Result:** ✅ **CLEAN** — done") == "clean"

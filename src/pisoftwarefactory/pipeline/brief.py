@@ -45,6 +45,9 @@ BRIEF_TEMPLATE = """\
    `git show --stat HEAD` after committing.
 3. The gates decide success. When they fail, read the output above, fix, commit.
 4. Do not touch `{{ main_branch }}`; you are on lane `{{ lane }}`.
+5. The deliverable is a file you wrote and committed, never an answer pasted into
+   chat. If the task names no path, choose one that fits the repo and say why in
+   the commit message. A reply that describes the file is not the file.
 """
 
 
