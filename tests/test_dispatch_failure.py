@@ -240,3 +240,17 @@ def test_agent_provider_worker_command_carries_no_key(monkeypatch):
     cmd = " ".join(pi_agent._base_command(config, "json"))
     assert "--provider freeflow --model ovh-free/gpt-oss-120b --mode json" in cmd
     assert "--api-key" not in cmd
+
+
+def test_the_dispatch_line_names_what_serves_the_model(monkeypatch, tmp_path):
+    """A cloud provider has no endpoint URL; printing the leftover local one is a lie."""
+    dead = pi_agent.PiRun(returncode=1, final_text="upstream 429")
+    _patch_dispatch(monkeypatch, tmp_path, dead)
+    config = FactoryConfig(harness={"name": "pi"}, backend={
+        "provider": "freeflow", "model": "ovh-free/gpt-oss-120b", "agent_credential": True,
+        "base_url": "http://127.0.0.1:8080/v1"})
+    msgs: list[str] = []
+    dispatch.dispatch_node(tmp_path, _node(), config, log=msgs.append)
+
+    assert "ovh-free/gpt-oss-120b @ freeflow" in msgs[0]
+    assert "127.0.0.1" not in msgs[0]

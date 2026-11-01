@@ -168,8 +168,11 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
             node, lane=lane, main_branch=config.release.main_branch, memories=memories, gate_feedback=gate_feedback
         )
         brief_path = write_brief(wt / ".factory" / "briefs", node, brief)
+        # Naming base_url for a provider the agent authenticates itself would
+        # point the operator at an endpoint the worker never calls.
+        serves = config.backend.provider if config.backend.agent_credential else config.backend.base_url
         log(f"  [bold]{node.id}[/] attempt {attempt + 1}: {config.harness.name} worker "
-              f"({config.backend.model} @ {config.backend.base_url}) on lane {lane} "
+              f"({config.backend.model} @ {serves}) on lane {lane} "
               f"(brief={brief_path.name})")
         run = run_worker(brief_path, config, cwd=wt, log=log)
         worker_runs.append(run)
