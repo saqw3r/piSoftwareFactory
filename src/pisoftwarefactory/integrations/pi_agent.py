@@ -116,6 +116,8 @@ def _base_command(config: FactoryConfig, mode: str) -> list[str]:
     the command line (for a custom endpoint it ignores models.json's apiKey and
     the provider env var, and a local llama.cpp wants the mocked ``"none"``),
     while omp selects ``provider/id`` and reads its key from its own registry.
+    An ``agent_credential`` backend gets no ``--api-key`` at all — that is the
+    only way a keyless provider such as freeflow answers instead of 401.
     """
     name = config.harness.name
     if not installed(name):
@@ -127,8 +129,10 @@ def _base_command(config: FactoryConfig, mode: str) -> list[str]:
     if name == "omp":
         cmd += ["--model", selectable_model_id(name, config.backend)]
     else:
-        cmd += ["--provider", config.backend.provider, "--model", config.backend.model,
-                "--api-key", config.backend.resolve_api_key()]
+        cmd += ["--provider", config.backend.provider, "--model", config.backend.model]
+        key = config.backend.resolve_api_key()
+        if key:
+            cmd += ["--api-key", key]
     if mode == "json":
         cmd += ["--mode", "json"]
     else:

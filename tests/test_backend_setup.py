@@ -193,3 +193,44 @@ def test_verify_names_the_model_not_the_executable(monkeypatch):
     backend_setup._run_stream([r"C:\Users\x\pi.CMD", "--model", "qwen3.5-9b"],
                               lambda _m: None, timeout=5, model="qwen3.5-9b")
     assert seen["model"] == "qwen3.5-9b"
+
+
+def test_a_keyless_agent_provider_is_never_given_the_mocked_key(tmp_path, fake_harness, monkeypatch):
+    """Live: `--api-key none` makes freeflow answer 401; without the flag it works.
+
+    The mocked key is a llama.cpp accommodation, not a universal one. A provider
+    the agent authenticates itself must get no ``--api-key`` at all, and a wizard
+    that also insists on logging in for it is sending the operator off a cliff.
+    """
+    _project(tmp_path)
+    monkeypatch.setattr(harnesses, "check_auth",
+                        lambda name, backend: (False, '{"status":"not_ready","reason":"provider_not_found"}'))
+    handovers: list[str] = []
+    monkeypatch.setattr(backend_setup, "_handover_login", lambda harness, log: handovers.append(harness))
+    msgs: list[str] = []
+    code = backend_setup.run_backend(
+        tmp_path, harness="pi", source="harness-login", provider="freeflow",
+        model="ovh-free/gpt-oss-120b", log=msgs.append, ask=_ask([]),
+    )
+
+    assert "--api-key" not in fake_harness[-1]
+    assert fake_harness[-1][:4] == ["pi", "--provider", "freeflow", "--model"]
+    assert handovers == []
+    assert "keyless" in " ".join(msgs)
+    assert code == 0
+    assert load_config(tmp_path).backend.agent_credential is True
+
+
+def test_a_provider_pi_reports_unauthorized_for_still_hands_over_the_login(tmp_path, fake_harness, monkeypatch):
+    """The no-login shortcut is only for providers pi does not manage at all."""
+    _project(tmp_path)
+    monkeypatch.setattr(harnesses, "check_auth",
+                        lambda name, backend: (False, '{"status":"not_ready","reason":"no_credential"}'))
+    handovers: list[str] = []
+    monkeypatch.setattr(backend_setup, "_handover_login", lambda harness, log: handovers.append(harness))
+    backend_setup.run_backend(
+        tmp_path, harness="pi", source="harness-login", provider="anthropic",
+        model="claude-x", log=lambda _m: None, ask=_ask([]),
+    )
+
+    assert handovers == ["pi"]

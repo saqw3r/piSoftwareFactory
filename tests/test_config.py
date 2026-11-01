@@ -52,3 +52,13 @@ def test_backend_generalized_url_plus_key(monkeypatch):
 
     monkeypatch.delenv("OPENAI_API_KEY")
     assert cfg.backend.resolve_api_key() == "none"
+
+
+def test_agent_credential_means_no_key_at_all(monkeypatch):
+    """Three states, and the middle one is the difference between 401 and an answer."""
+    from pisoftwarefactory.config import Backend
+
+    monkeypatch.delenv("SOME_KEY_ENV", raising=False)
+    assert Backend().resolve_api_key() == "none"                       # local llama.cpp
+    assert Backend(api_key_env="SOME_KEY_ENV").resolve_api_key() == "none"  # env var unset
+    assert Backend(agent_credential=True, api_key_env="SOME_KEY_ENV").resolve_api_key() == ""

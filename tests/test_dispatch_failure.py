@@ -223,3 +223,20 @@ def test_git_refusal_reports_its_own_cause(monkeypatch, tmp_path):
     state = dispatch._lane_state(tmp_path, "main")
     assert state.produced is False
     assert "dubious ownership" in state.refusal
+
+
+def test_agent_provider_worker_command_carries_no_key(monkeypatch):
+    """The worker builds its command the same way: a keyless provider gets no flag.
+
+    ``--api-key none`` is what makes a local llama.cpp accept the request, and what
+    makes freeflow answer 401 — so it has to be a per-backend decision, not a
+    constant in the command line.
+    """
+    monkeypatch.setattr(pi_agent, "installed", lambda name: True)
+    monkeypatch.setattr(pi_agent, "binary", lambda name: name)
+    config = FactoryConfig(harness={"name": "pi"}, backend={
+        "provider": "freeflow", "model": "ovh-free/gpt-oss-120b", "agent_credential": True})
+
+    cmd = " ".join(pi_agent._base_command(config, "json"))
+    assert "--provider freeflow --model ovh-free/gpt-oss-120b --mode json" in cmd
+    assert "--api-key" not in cmd

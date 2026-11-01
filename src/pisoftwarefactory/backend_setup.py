@@ -183,15 +183,21 @@ def run_backend(
     if source == "harness-login":
         backend = Backend(provider=provider or config.backend.provider,
                           base_url=config.backend.base_url,
-                          model=model, api_key_env=api_key_env or config.backend.api_key_env)
+                          model=model, api_key_env=api_key_env or config.backend.api_key_env,
+                          agent_credential=True)
         if not (model_given or yes):
             catalog = harnesses.harness_models(harness)
             backend = backend.model_copy(update={"model": pick_model(catalog, backend.model, _ask, log)})
         ready, detail = harnesses.check_auth(harness, backend)
+        unmanaged = "provider_not_found" in detail
         if ready and not login:
             log(f"  {harness} already has a credential for this provider — no login needed")
+        elif unmanaged and not login:
+            log(f"  {harness} does not keep credentials for {backend.provider!r} — the agent's own "
+                "extension serves it (freeflow and other keyless providers). No login to do; "
+                "proving it with one real prompt instead")
         else:
-            if not ready:
+            if not ready and not unmanaged:
                 log(f"  {harness} reports: {detail}")
             _handover_login(harness, log)
         outcome = _verify(harness, backend, log, runtime_key=False, timeout_s=verify_budget)
@@ -238,7 +244,10 @@ def _verify(harness: str, backend: Backend, log, runtime_key: bool = True, timeo
         "agent's system prompt; raise [harness] verify_timeout_min if this box is slower[/]")
     rc, output = _run_stream(argv, log, timeout=timeout_s, model=backend.model)
     if rc == 124:
-        log(f"  [red]no answer within {timeout_s}s[/] — {backend.model!r} at {backend.base_url} "
+        # Naming base_url for a provider the agent serves itself points the operator
+        # at an endpoint that was never called.
+        where = f"on provider {backend.provider}" if backend.agent_credential else f"at {backend.base_url}"
+        log(f"  [red]no answer within {timeout_s}s[/] — {backend.model!r} {where} "
             "is slower than the budget, not necessarily broken")
         hint = harnesses.remedy("timed out", backend, harness)
         if hint:

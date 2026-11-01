@@ -34,6 +34,8 @@ class Backend(BaseModel):
     provider block, ``api`` the pi API flavor, ``api_key_env`` the env
     var holding the key. Empty ``api_key_env`` means a mocked key
     (llama.cpp default: ``"none"``) — nothing secret lands in factory.toml.
+    ``agent_credential`` drops the key from the command line entirely, for
+    providers the harness logs into itself.
     """
 
     provider: str = "llamacpp"
@@ -42,9 +44,18 @@ class Backend(BaseModel):
     context_window: int = 65536
     api: str = "openai-completions"
     api_key_env: str = ""
+    agent_credential: bool = False
 
     def resolve_api_key(self) -> str:
-        """Real key from ``api_key_env``, or the mocked ``"none"`` default."""
+        """Real key from ``api_key_env``, the mocked ``"none"`` default, or "" for none.
+
+        ``agent_credential`` means the harness authenticates this provider itself
+        (pi's login, or an extension provider like freeflow). Handing such a
+        provider a mocked key is not harmless: pi sends it as a bearer token and
+        the upstream answers 401 on every request.
+        """
+        if self.agent_credential:
+            return ""
         if not self.api_key_env:
             return "none"
         return os.environ.get(self.api_key_env, "") or "none"

@@ -226,8 +226,9 @@ def verify_argv(name: str, backend: Backend, runtime_key: bool = True) -> list[s
     if name == "omp":
         return [binary(name), "--model", selectable_model_id(name, backend), "--print", _VERIFY_PROMPT]
     argv = [binary(name), "--provider", backend.provider, "--model", backend.model]
-    if runtime_key:
-        argv += ["--api-key", backend.resolve_api_key()]
+    key = backend.resolve_api_key()
+    if runtime_key and key:
+        argv += ["--api-key", key]
     return argv + ["--print", _VERIFY_PROMPT]
 
 
