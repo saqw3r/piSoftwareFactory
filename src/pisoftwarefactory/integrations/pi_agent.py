@@ -217,8 +217,22 @@ def _describe(event: dict, elapsed_s: float) -> str:
     return f"[dim]{stamp}[/] {etype.replace('_', ' ')}"
 
 
+def _quiet_reason(model: str, agent_credential: bool, provider: str) -> str:
+    """Why the stream went silent — which is a different story per backend.
+
+    A local GGUF is reading a 12k-token prompt; a cloud relay that has already
+    answered twice and then stops is throttling or dropping the turn. Printing
+    the local excuse for a cloud model sends the operator to the wrong box.
+    """
+    if agent_credential:
+        return (f"{model} is quiet — it answered earlier, so this is {provider or 'the provider'} "
+                "free-tier throttling or a dropped relay turn, not a prompt to reload")
+    return f"{model} is still reading the prompt; a local model spends most of the turn here"
+
+
 def stream_agent(cmd: list[str], cwd: Path | None, timeout_s: int, model: str,
-                 log=None, quiet_s: float = 45.0, echo_text: bool = False) -> tuple[int, str, str]:
+                 log=None, quiet_s: float = 45.0, echo_text: bool = False,
+                 agent_credential: bool = False, provider: str = "") -> tuple[int, str, str]:
     """Run an agent command, echoing progress as events land; returns (rc, stdout, stderr).
 
     Shared with `sfactory backend`, which asks the agent one question and must
@@ -266,8 +280,7 @@ def stream_agent(cmd: list[str], cwd: Path | None, timeout_s: int, model: str,
             spent = f"{minutes:.0f} min" if minutes >= 1 else f"{timeout_s}s"
             return (124, "".join(out), f"timed out after {spent} waiting for {model}")
         if log and now - last_sight > quiet_s:
-            log(f"    │ … {now - started:.0f}s with no event — [bold]{model}[/] is "
-                "still reading the prompt; a local model spends most of the turn here")
+            log(f"    │ … {now - started:.0f}s with no event — [bold]{_quiet_reason(model, agent_credential, provider)}[/]")
             last_sight = now
         try:
             line = lines.get(timeout=poll)
@@ -307,7 +320,8 @@ def run_worker(brief_path: Path, config: FactoryConfig, cwd: Path, log=None) -> 
     cmd.append(f"@{brief_path}")
     started = __import__("time").monotonic()
     rc, stdout, stderr = stream_agent(cmd, cwd, config.harness.worker_timeout_min * 60,
-                                      config.backend.model, log=log)
+                                      config.backend.model, log=log, agent_credential=config.backend.agent_credential,
+                                      provider=config.backend.provider)
     run = _parse_events(stdout)
     run.returncode = rc
     if not run.final_text and stdout and not stdout.lstrip().startswith("{"):

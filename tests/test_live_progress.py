@@ -91,6 +91,23 @@ def test_quiet_stream_says_what_it_is_waiting_for(monkeypatch):
     assert any("with no event" in m and "qwen3.5-9b" in m for m in msgs)
 
 
+def test_a_cloud_backend_is_not_blamed_on_loading_a_local_prompt(monkeypatch):
+    """The same silence means two different things on two different backends.
+
+    Live: a keyless freeflow relay answered twice, then went quiet for 90s. The
+    heartbeat insisted a local model was reading its prompt — pointing the
+    operator at a box that was not involved.
+    """
+    _install(monkeypatch, FakeProc([], delay=5))
+    msgs: list[str] = []
+    stream_agent(["pi"], Path("."), 1, "ovh-free/gpt-oss-120b", log=msgs.append, quiet_s=0.1,
+                 agent_credential=True, provider="freeflow")
+
+    text = "\n".join(msgs)
+    assert "with no event" in text and "freeflow free-tier throttling" in text
+    assert "local model" not in text
+
+
 def test_plain_text_answers_are_echoed_too(monkeypatch):
     """`sfactory backend` verifies with --print: the answer is not JSON."""
     _install(monkeypatch, FakeProc(["OK\n"]))

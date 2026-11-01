@@ -45,6 +45,8 @@ def _run_stream(
     log,
     timeout: int = _VERIFY_TIMEOUT_SEC,
     model: str = "the agent",
+    agent_credential: bool = False,
+    provider: str = "",
 ) -> tuple[int, str]:
     """Run *argv*, echoing each line as it lands; returns (rc, captured output).
 
@@ -53,8 +55,9 @@ def _run_stream(
     The quiet-progress line names *model*, not argv[0] — the executable never
     varies, the model does, and "which one is thinking" is the question.
     """
-    rc, out, errtext = stream_agent(argv, None, timeout, model,
-                                    log=log, quiet_s=30, echo_text=True)
+    rc, out, errtext = stream_agent(argv, None, timeout, model, log=log, quiet_s=30,
+                                    echo_text=True, agent_credential=agent_credential,
+                                    provider=provider)
     return (rc, out + errtext)
 
 
@@ -246,7 +249,8 @@ def _verify(harness: str, backend: Backend, log, runtime_key: bool = True, timeo
             f"budget {timeout_s // 60} min on {backend.provider} — the answer should land in "
             "seconds; a timeout here means the free tier is throttling or the id is dead")
     log(f"  [dim]{slow}[/]")
-    rc, output = _run_stream(argv, log, timeout=timeout_s, model=backend.model)
+    rc, output = _run_stream(argv, log, timeout=timeout_s, model=backend.model,
+                             agent_credential=backend.agent_credential, provider=backend.provider)
     if rc == 124:
         # Naming base_url for a provider the agent serves itself points the operator
         # at an endpoint that was never called.

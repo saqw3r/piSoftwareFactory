@@ -24,7 +24,7 @@ def fake_harness(monkeypatch):
     monkeypatch.setattr(harnesses, "harness_models", lambda name: [])
     calls: list[list[str]] = []
 
-    def _stub_run_stream(argv, log, timeout=1, model="the agent"):
+    def _stub_run_stream(argv, log, timeout=1, model="the agent", agent_credential=False, provider=""):
         calls.append(argv)
         log(f"  stub ran {argv[0]}")
         return (0, "OK")
@@ -82,7 +82,7 @@ def test_missing_credential_reports_the_login_command_and_changes_nothing(tmp_pa
     config = _project(tmp_path)
     before = (tmp_path / "factory.toml").read_text(encoding="utf-8")
 
-    def _failing(argv, log, timeout=1, model="the agent"):
+    def _failing(argv, log, timeout=1, model="the agent", agent_credential=False, provider=""):
         return (1, "Error: No API key found for llamacpp")
 
     monkeypatch.setattr(backend_setup, "_run_stream", _failing)
@@ -185,7 +185,7 @@ def test_verify_names_the_model_not_the_executable(monkeypatch):
     """
     seen: dict = {}
 
-    def fake_stream_agent(cmd, cwd, timeout_s, model, log=None, quiet_s=30, echo_text=False):
+    def fake_stream_agent(cmd, cwd, timeout_s, model, log=None, quiet_s=30, echo_text=False, agent_credential=False, provider=""):
         seen["model"] = model
         return (0, "OK", "")
 
