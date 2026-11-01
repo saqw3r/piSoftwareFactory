@@ -101,22 +101,39 @@ def _is_bookkeeping(status_line: str) -> bool:
     return path.startswith(".factory/")
 
 
-def _lane_produced_change(wt: Path, base_ref: str) -> tuple[bool, str]:
-    """(work left behind, why that is unknowable) — a refused git call is not an empty lane.
+@dataclass(frozen=True)
+class LaneState:
+    """What the lane actually holds after the agent stopped — and whether git said so."""
+
+    edits: tuple[str, ...] = ()   # paths changed or left untracked, the brief excluded
+    committed: bool = False       # commits ahead of the base ref
+    refusal: str = ""             # git's own words when it declined to answer
+
+    @property
+    def produced(self) -> bool:
+        return self.committed or bool(self.edits)
+
+
+def _lane_state(wt: Path, base_ref: str) -> LaneState:
+    """Ask git what the lane holds.
 
     Gates passing on a lane identical to its base prove nothing, but neither does
     a blank ``git status`` when git actually declined to run; only the first is a
     fact, so the second case travels with its own cause.
+
+    ``committed`` is a separate fact from ``produced`` on purpose. An agent can
+    write the deliverable and never commit it, and ``release`` merges the *branch*
+    — so an uncommitted file passes review, gets called done, and then vanishes
+    from the merge without a word.
     """
     try:
         ahead = _git(wt, "rev-list", "--count", f"{base_ref}..HEAD").stdout.strip()
-        if ahead.isdigit() and int(ahead) > 0:
-            return True, ""
         status = _git(wt, "status", "--porcelain", "--untracked-files=all").stdout
     except GitRefused as exc:
-        return False, str(exc)
-    edits = [line for line in status.splitlines() if line.strip() and not _is_bookkeeping(line)]
-    return bool(edits), ""
+        return LaneState(refusal=str(exc))
+    edits = tuple(line[2:].strip().strip('"') for line in status.splitlines()
+                  if line.strip() and not _is_bookkeeping(line))
+    return LaneState(edits=edits, committed=ahead.isdigit() and int(ahead) > 0)
 
 
 def _why_nothing_changed(run: PiRun, config: FactoryConfig, log) -> None:
@@ -185,27 +202,35 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
         )
         log(f"    gates BLOCKED ({evidence}) — feeding output back to worker")
 
-    produced, refused = _lane_produced_change(wt, _resolve_base_ref(root, config, log))
+    state = _lane_state(wt, _resolve_base_ref(root, config, log))
     if worker_died:
         last = worker_runs[-1]
         # Its own words are the diagnosis; "rc=1" alone sends the operator guessing.
         evidence = evidence or (f"{config.harness.name} exited rc={last.returncode}"
                                 f" with no change: {(last.final_text or '').strip()[:400] or 'it said nothing'}")
-    elif refused:
-        evidence = f"the lane could not be inspected: {refused}"
+    elif state.refusal:
+        evidence = f"the lane could not be inspected: {state.refusal}"
         log(f"    [red]cannot tell whether this lane holds work[/] — git refused, so nothing is "
-            f"being called done:\n      {refused}")
-    elif gate_pass and not produced:
+            f"being called done:\n      {state.refusal}")
+    elif gate_pass and not state.produced:
         evidence = (f"the agent finished cleanly but left no commit and no edit in the lane "
                     f"({config.harness.name} + {config.backend.model})")
         log(f"    [red]{evidence}[/] — not marking it done")
         _why_nothing_changed(worker_runs[-1], config, log)
+    elif gate_pass and not state.committed:
+        left = ", ".join(state.edits[:8])
+        evidence = (f"the agent wrote {len(state.edits)} file(s) and committed none of them "
+                    f"({left}) — release merges commits, so this would be dropped without a trace")
+        log(f"    [red]{evidence}[/] — not marking it done")
+        add = " ".join(f'"{p}"' for p in state.edits[:8])
+        log(f'    to keep the work: git -C "{wt}" add -- {add} && '
+            f'git -C "{wt}" commit -m "{node.id}: {node.title[:60]}"')
     elif not gate_pass and gate_feedback:
         # The summary says which language blocked; the operator also needs what
         # the gate said, and the worker's retry already got this text.
         evidence = f"{evidence}\n{gate_feedback[:1000]}"
     node.gate_status = "pass" if gate_pass else "blocked"
-    node.status = "done" if (gate_pass and produced and not worker_died and not refused) else "blocked"
+    node.status = "done" if (gate_pass and state.committed and not worker_died and not state.refusal) else "blocked"
     # The reason outlives the terminal: `sfactory status` and `sfactory wave`
     # both read it off the graph days later, when nobody has the scrollback.
     node.evidence = "" if node.status == "done" else (evidence or "blocked without a recorded reason")

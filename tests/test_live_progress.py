@@ -138,7 +138,7 @@ def test_worker_timeout_blocks_with_a_budget_fix(monkeypatch, tmp_path):
     monkeypatch.setattr(dispatch, "run_worker", lambda brief, config, cwd, log=None: run)
     monkeypatch.setattr(dispatch, "hindsight", type("H", (), {"recall": staticmethod(lambda *a, **k: []),
                                                               "retain": staticmethod(lambda *a, **k: True)})())
-    monkeypatch.setattr(dispatch, "_lane_produced_change", lambda wt, base: (False, ""))
+    monkeypatch.setattr(dispatch, "_lane_state", lambda wt, base: dispatch.LaneState())
     msgs: list[str] = []
     node = Node(id="n001", title="t", task="t", kind="feature", risk="standard", language="csharp")
     result = dispatch.dispatch_node(tmp_path, node, config, log=msgs.append)

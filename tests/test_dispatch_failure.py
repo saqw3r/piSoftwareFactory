@@ -95,11 +95,39 @@ def test_a_real_change_with_passing_gates_is_done_and_holds_no_reason(monkeypatc
     _patch_dispatch(monkeypatch, tmp_path, ok)
     passing = [ProfileResult(language="python", steps=[StepResult(name="detect", status="passed")])]
     monkeypatch.setattr(dispatch, "run_gates", lambda wt, config, **k: passing)
-    monkeypatch.setattr(dispatch, "_lane_produced_change", lambda wt, base: (True, ""))
+    monkeypatch.setattr(dispatch, "_lane_state",
+                        lambda wt, base: dispatch.LaneState(edits=("thing.py",), committed=True))
     result = dispatch.dispatch_node(tmp_path, _node(), _config(), log=lambda _m: None)
 
     assert result.node.status == "done"
     assert (result.node.evidence, result.evidence) == ("", "")
+
+
+def test_an_uncommitted_deliverable_is_not_done_because_release_merges_commits(monkeypatch, tmp_path):
+    """The file exists, the gates pass, the reviewer sees it — and it still gets dropped.
+
+    ``release`` merges the lane *branch*, so work the agent never committed vanishes
+    from the merge with no error. `done` has to mean "this survives a release", not
+    "something is sitting on disk".
+    """
+    from pisoftwarefactory.gates import ProfileResult, StepResult
+
+    ok = pi_agent.PiRun(returncode=0, input_tokens=10, output_tokens=5)
+    _patch_dispatch(monkeypatch, tmp_path, ok)
+    passing = [ProfileResult(language="python", steps=[StepResult(name="detect", status="passed")])]
+    monkeypatch.setattr(dispatch, "run_gates", lambda wt, config, **k: passing)
+    monkeypatch.setattr(dispatch, "_lane_state",
+                        lambda wt, base: dispatch.LaneState(edits=("ARCHITECTURE.md",)))
+    msgs: list[str] = []
+    result = dispatch.dispatch_node(tmp_path, _node(), _config(), log=msgs.append)
+
+    assert result.node.status == "blocked"
+    text = "\n".join(msgs)
+    assert "committed none of them" in text
+    assert text.count("ARCHITECTURE.md") >= 2  # the reason, and the command that saves it
+    assert f'git -C "{tmp_path}" add --' in text
+    assert 'commit -m "n001: do the thing"' in text
+    assert "ARCHITECTURE.md" in result.node.evidence
 
 
 def test_clean_worker_with_an_empty_lane_is_not_done(monkeypatch, tmp_path):
@@ -109,7 +137,7 @@ def test_clean_worker_with_an_empty_lane_is_not_done(monkeypatch, tmp_path):
     _patch_dispatch(monkeypatch, tmp_path, ok)
     passing = [ProfileResult(language="python", steps=[StepResult(name="detect", status="passed")])]
     monkeypatch.setattr(dispatch, "run_gates", lambda wt, config, **k: passing)
-    monkeypatch.setattr(dispatch, "_lane_produced_change", lambda wt, base: (False, ""))
+    monkeypatch.setattr(dispatch, "_lane_state", lambda wt, base: dispatch.LaneState())
     msgs: list[str] = []
     result = dispatch.dispatch_node(tmp_path, _node(), _config(), log=msgs.append)
 
@@ -125,7 +153,7 @@ def test_silent_model_is_named_instead_of_left_mystery(monkeypatch, tmp_path):
     _patch_dispatch(monkeypatch, tmp_path, ok)
     passing = [ProfileResult(language="python", steps=[StepResult(name="detect", status="passed")])]
     monkeypatch.setattr(dispatch, "run_gates", lambda wt, config, **k: passing)
-    monkeypatch.setattr(dispatch, "_lane_produced_change", lambda wt, base: (False, ""))
+    monkeypatch.setattr(dispatch, "_lane_state", lambda wt, base: dispatch.LaneState())
     msgs: list[str] = []
     config = FactoryConfig(harness={"name": "pi"}, backend={"model": "tiny-local-model"})
     dispatch.dispatch_node(tmp_path, _node(), config, log=msgs.append)
@@ -145,8 +173,7 @@ def test_refused_git_inspection_blocks_without_claiming_an_empty_lane(monkeypatc
     passing = [ProfileResult(language="python", steps=[StepResult(name="detect", status="passed")])]
     monkeypatch.setattr(dispatch, "run_gates", lambda wt, config, **k: passing)
     refusal = "fatal: detected dubious ownership in repository at 'Z:/work/L1'"
-    monkeypatch.setattr(dispatch, "_lane_produced_change",
-                        lambda wt, base: (False, refusal))
+    monkeypatch.setattr(dispatch, "_lane_state", lambda wt, base: dispatch.LaneState(refusal=refusal))
     msgs: list[str] = []
     result = dispatch.dispatch_node(tmp_path, _node(), _config(), log=msgs.append)
 
@@ -161,16 +188,19 @@ def test_lane_change_is_measured_by_commits_or_edits(monkeypatch, tmp_path):
                               "stdout": {"rev-list": "0\n", "status": ""}[cmd]})()
 
     monkeypatch.setattr(dispatch, "_git", fake_git)
-    assert dispatch._lane_produced_change(tmp_path, "main") == (False, "")
+    state = dispatch._lane_state(tmp_path, "main")
+    assert (state.produced, state.committed, state.refusal) == (False, False, "")
 
     monkeypatch.setattr(dispatch, "_git", lambda _root, cmd, *a, **k: type(
         "R", (), {"returncode": 0, "stdout": "1\n"})())
-    assert dispatch._lane_produced_change(tmp_path, "main") == (True, "")
+    state = dispatch._lane_state(tmp_path, "main")
+    assert (state.produced, state.committed) == (True, True)
 
-    # No commit, but the agent left edits behind — still work worth reviewing.
+    # No commit, but the agent left edits behind — reviewable, not releasable.
     monkeypatch.setattr(dispatch, "_git", lambda _root, cmd, *a, **k: type(
         "R", (), {"returncode": 0, "stdout": "0\n" if cmd == "rev-list" else " M file.cs\n"})())
-    assert dispatch._lane_produced_change(tmp_path, "main") == (True, "")
+    state = dispatch._lane_state(tmp_path, "main")
+    assert (state.produced, state.committed, state.edits) == (True, False, ("file.cs",))
 
 
 def test_the_brief_in_the_lane_is_not_counted_as_work(monkeypatch, tmp_path):
@@ -182,7 +212,7 @@ def test_the_brief_in_the_lane_is_not_counted_as_work(monkeypatch, tmp_path):
     monkeypatch.setattr(dispatch, "_git", lambda _root, cmd, *a, **k: type(
         "R", (), {"returncode": 0,
                   "stdout": "0\n" if cmd == "rev-list" else "?? .factory/briefs/n004.md\n"})())
-    assert dispatch._lane_produced_change(tmp_path, "main") == (False, "")
+    assert dispatch._lane_state(tmp_path, "main").produced is False
 
 
 def test_git_refusal_reports_its_own_cause(monkeypatch, tmp_path):
@@ -190,6 +220,6 @@ def test_git_refusal_reports_its_own_cause(monkeypatch, tmp_path):
         raise gitcmd.GitRefused("git rev-list failed (rc=128): fatal: detected dubious ownership")
 
     monkeypatch.setattr(dispatch, "_git", refusing)
-    produced, reason = dispatch._lane_produced_change(tmp_path, "main")
-    assert produced is False
-    assert "dubious ownership" in reason
+    state = dispatch._lane_state(tmp_path, "main")
+    assert state.produced is False
+    assert "dubious ownership" in state.refusal
