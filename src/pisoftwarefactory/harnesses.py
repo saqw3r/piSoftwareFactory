@@ -189,10 +189,14 @@ def provider_block(backend: Backend) -> dict:
     ``llamacpp/qwen3.5-9b`` reaches llama-router verbatim and it answers 400
     "model not found".)
     """
+    # pi 1.5.0 validates the registry and rejects an empty apiKey outright —
+    # a placeholder keeps the file loadable; the factual key still flows via
+    # --api-key at runtime (or the agent's own credential, for keyless ids).
+    api_key = backend.resolve_api_key() or "none"
     return {
         "baseUrl": backend.base_url,
         "api": backend.api,
-        "apiKey": backend.resolve_api_key(),
+        "apiKey": api_key,
         "models": [{"id": backend.model}],
     }
 
@@ -254,8 +258,11 @@ def register_provider(name: str, backend: Backend, log=print) -> str:
     """Merge the backend's provider block into the harness registry (idempotent).
 
     Returns `registered` / `already-registered` / `created`. A file we cannot
-    parse raises with the fix; nothing is written blind over it.
+    parse raises with the fix; nothing is written blind over it. Repairs empty
+    apiKeys first — one stale keyless entry makes pi 1.5.0 reject the whole
+    file, which would read back as "Unknown provider" for everything.
     """
+    repair_empty_keys(name, log)
     path = registry_path(name)
     block = provider_block(backend)
 
@@ -288,6 +295,39 @@ def register_provider(name: str, backend: Backend, log=print) -> str:
     log(f"  [green]{'created' if created else 'registered'}[/] {name} provider "
         f"{backend.provider} → {backend.base_url} in {path}")
     return "created" if created else "registered"
+
+
+def repair_empty_keys(name: str, log=print) -> int:
+    """Fill empty apiKeys in the harness registry with the 'none' placeholder.
+
+    pi 1.5.0 validates models.json and rejects the whole file over a single
+    empty apiKey — one stale keyless entry (e.g. a freeflow experiment) takes
+    every custom provider down with it. A placeholder is safe: the factual key
+    still flows via --api-key at runtime, and keyless extensions ignore the
+    registry value. Idempotent; backs up before the first change.
+    """
+    path = registry_path(name)
+    data = registry_load(name)
+    providers = (data or {}).get("providers")
+    if not isinstance(providers, dict):
+        return 0
+    changed = 0
+    for pid, block in providers.items():
+        if isinstance(block, dict) and block.get("apiKey", "none") == "":
+            block["apiKey"] = "none"
+            changed += 1
+    if changed:
+        _backup(path)
+        if _REGISTRY_FILE[name][1] == "json":
+            payload = json.dumps(data, indent=2) + "\n"
+        else:
+            import yaml
+
+            payload = yaml.safe_dump(data, sort_keys=False)
+        path.write_text(payload, encoding="utf-8", newline="\n")
+        log(f"  [green]repaired[/] {name} registry: {changed} empty apiKey(s) -> 'none' "
+            f"(pi 1.5.0 rejects the file over them) in {path}")
+    return changed
 
 
 def list_models(backend: Backend, harness: str | None = None) -> list[str]:

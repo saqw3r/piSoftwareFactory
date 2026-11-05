@@ -200,3 +200,34 @@ def test_zcode_spawn_injects_both_provider_configs(monkeypatch, tmp_path):
     harnesses.spawn_argv("zcode")
     assert os.environ["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"] == r"C:\custom\personal.json"
     assert os.environ["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] == r"C:\custom\builtin.json"
+
+
+def test_repair_empty_keys_fixes_whole_file_rejections(monkeypatch, tmp_path):
+    """pi 1.5.0 validates models.json and rejects the entire file over one empty
+    apiKey — 'Unknown provider' for everything. The repair placeholders them."""
+    import yaml
+
+    pi_dir = tmp_path / "pi-agent"
+    pi_dir.mkdir(parents=True)
+    (pi_dir / "models.json").write_text(json.dumps({
+        "providers": {
+            "freeflow": {"baseUrl": "http://x/v1", "api": "openai-completions", "apiKey": ""},
+            "llamacpp": {"baseUrl": "http://127.0.0.1:8080/v1", "api": "openai-completions",
+                         "apiKey": "none", "models": [{"id": "qwen3.5-9b"}]},
+        }
+    }), encoding="utf-8")
+    msgs: list[str] = []
+    changed = harnesses.repair_empty_keys("pi", log=msgs.append)
+    assert changed == 1
+    data = json.loads((pi_dir / "models.json").read_text(encoding="utf-8"))
+    assert data["providers"]["freeflow"]["apiKey"] == "none"
+    assert data["providers"]["llamacpp"]["apiKey"] == "none"
+    assert (pi_dir / "models.json.bak").is_file()
+    assert any("repaired" in m for m in msgs)
+
+    omp_dir = tmp_path / "omp-agent"
+    omp_dir.mkdir(parents=True)
+    (omp_dir / "models.yml").write_text(yaml.safe_dump(
+        {"providers": {"a": {"apiKey": ""}}}), encoding="utf-8")
+    assert harnesses.repair_empty_keys("omp") == 1
+    assert yaml.safe_load((omp_dir / "models.yml").read_text(encoding="utf-8"))["providers"]["a"]["apiKey"] == "none"

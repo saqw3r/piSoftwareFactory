@@ -42,6 +42,18 @@ _SOURCE_LABELS = {
 # source is (`--source qoder`, or typed at the menu) and pre-answers the
 # questions the openai-endpoint flow would ask; explicit flags still win.
 PRESETS: dict[str, dict[str, str]] = {
+    "llamacpp": {
+        "base_url": "http://127.0.0.1:8080/v1",
+        "api_key_env": "",
+        "provider": "llamacpp",
+        "label": "local llama.cpp / llama-router (:8080, mocked key)",
+    },
+    "ollama": {
+        "base_url": "http://127.0.0.1:11434/v1",
+        "api_key_env": "",
+        "provider": "ollama",
+        "label": "local Ollama (:11434, mocked key)",
+    },
     "qoder": {
         "base_url": "http://127.0.0.1:8790/v1",
         "api_key_env": "QODER_API_KEY",
@@ -463,6 +475,11 @@ def run_provider(
         return 2
 
     backend = config.backend
+    if harness != "zcode" and backend.agent_credential:
+        # agent_credential is a zcode-era record: pi/omp take the key at runtime
+        # again (pi ignores registry keys for custom endpoints by design).
+        backend = backend.model_copy(update={"agent_credential": False})
+        log("  [dim]agent_credential cleared — pi/omp take the key at runtime again[/]")
     if harnesses.has_registry(harness):
         harnesses.register_provider(harness, backend, log)
     else:
@@ -473,6 +490,7 @@ def run_provider(
         log("  factory.toml left unchanged (the check failed)")
         return outcome
     config.harness.name = harness  # type: ignore[assignment]
+    config.backend = backend
     save_config(config, root)
     log("  [green]saved[/] factory.toml")
     _update_company_seed(root, harness, backend, log)
@@ -518,7 +536,10 @@ def run_model(
         log(f"  [yellow]{model!r} is not in the endpoint's catalog[/] — trying anyway "
             f"(catalog had: {', '.join(listed[:5])}…)")
 
-    candidate = config.backend.model_copy(update={"model": model})
+    backend = config.backend
+    if backend.agent_credential:  # registry harness: keys flow at runtime again
+        backend = backend.model_copy(update={"agent_credential": False})
+    candidate = backend.model_copy(update={"model": model})
     harnesses.register_provider(harness, candidate, log)
     outcome = _verify(harness, candidate, log, timeout_s=config.harness.verify_timeout_min * 60)
     if outcome != 0:
