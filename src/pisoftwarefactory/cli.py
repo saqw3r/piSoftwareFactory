@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -232,30 +233,61 @@ def update() -> None:
 @app.command()
 def backend(
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
-    harness: str = typer.Option("", "--harness", help="Coding agent: pi | omp."),
-    source: str = typer.Option("", "--source", help="llama-local | openai-endpoint | harness-login."),
+    harness: str = typer.Option("", "--harness", help="Coding agent: pi | omp | zcode."),
+    source: str = typer.Option("", "--source", help="llama-local | openai-endpoint | harness-login | preset (qoder, dashscope)."),
     base_url: str = typer.Option("", "--base-url", help="Endpoint serving /v1/models."),
     model: str = typer.Option("", "--model", help="Model id (otherwise picked from the live list)."),
     api_key_env: str = typer.Option("", "--api-key-env", help="Env var holding the endpoint key."),
     provider: str = typer.Option("", "--provider", help="Provider id the agent knows this endpoint by."),
     login: bool = typer.Option(False, "--login", help="Hand the terminal to the agent's own login flow."),
-    verify: bool = typer.Option(True, "--verify/--no-verify", help="Run one real prompt through the agent."),
+    show: bool = typer.Option(False, "--show", help="Print the effective choice and any factory.toml ↔ registry drift; change nothing."),
+    verify: bool | None = typer.Option(
+        None, "--verify/--no-verify",
+        help="One real prompt through the agent. Default (auto): only when something "
+             "changed — pass --verify to re-check an unchanged backend.",
+    ),
     verify_timeout_min: int = typer.Option(
         0, "--verify-timeout-min",
         help="Minutes the proof prompt may take (0 = [harness] verify_timeout_min; a local GGUF needs several).",
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="No questions — take the defaults and the values passed."),
 ) -> None:
-    """Choose the worker brain — pi/omp × local llama.cpp / OpenAI endpoint / subscription login."""
+    """Choose the worker brain — pi/omp/zcode × local llama.cpp / OpenAI endpoint / subscription login."""
     _start_file_log(root)
     from .backend_setup import run_backend
 
     code = run_backend(
         root, harness=harness, source=source, base_url=base_url, model=model,
-        api_key_env=api_key_env, provider=provider, login=login, verify=verify,
+        api_key_env=api_key_env, provider=provider, login=login, show=show, verify=verify,
         verify_timeout_min=verify_timeout_min, yes=yes, log=console.print,
     )
     raise typer.Exit(code=code)
+
+
+@app.command()
+def provider(
+    harness: str = typer.Argument("", help="pi | omp | zcode (omit for the menu)."),
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="No questions."),
+) -> None:
+    """Switch the worker brain — pi | omp | zcode — and prove it answers (ADR-0017/0019)."""
+    _start_file_log(root)
+    from .backend_setup import run_provider
+
+    raise typer.Exit(code=run_provider(root, harness=harness, yes=yes, log=console.print))
+
+
+@app.command()
+def model(
+    model_id: str = typer.Argument("", help="Model id (omit to pick from the live list)."),
+    root: Path = typer.Option(Path("."), "--root", help="Project root."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="No questions — take the first listed model."),
+) -> None:
+    """Choose the model the provider serves (live catalog first)."""
+    _start_file_log(root)
+    from .backend_setup import run_model
+
+    raise typer.Exit(code=run_model(root, model=model_id, yes=yes, log=console.print))
 
 
 @app.command()
@@ -311,6 +343,8 @@ def run(
     root = root.resolve()
     config = load_config(root)
     graph = load_graph(root)
+    from .integrations.pi_agent import brain_label
+    console.print(f"[dim]brain: {brain_label(config)}[/]")
 
     decision = run_intake(task, config)
     if lang:
@@ -396,6 +430,8 @@ def wave(
     root = root.resolve()
     config = load_config(root)
     graph = load_graph(root)
+    from .integrations.pi_agent import brain_label
+    console.print(f"[dim]brain: {brain_label(config)}[/]")
     ready = graph.ready()
     if not ready:
         console.print("no ready nodes in launch.graph.json — add tasks with `sfactory run`")
@@ -555,6 +591,25 @@ def status(
     root = root.resolve()
     graph = load_graph(root)
 
+    # The brain status shows what doctor proves: which agent, which endpoint,
+    # which model, and whether the key env var is set — without printing the key.
+    import os
+
+    from .config import load_config
+
+    try:
+        cfg = load_config(root)
+        b = cfg.backend
+        if b.agent_credential:
+            key = "the agent's own login"
+        elif b.api_key_env:
+            key = f"${b.api_key_env} ({'set' if os.environ.get(b.api_key_env) else 'not set'})"
+        else:
+            key = "mocked (none)"
+        console.print(f"brain: {cfg.harness.name} · {b.provider} · {b.base_url} · {b.model} · key: {key}")
+    except FileNotFoundError:
+        console.print("[dim]brain: no factory.toml — run `sfactory init`[/]")
+
     table = Table(title="graph", title_justify="left")
     for col in ("id", "title", "kind", "risk", "lane", "status", "gates", "verdict"):
         table.add_column(col)
@@ -583,9 +638,36 @@ def status(
                 console.print(f"last gates [{r['language']}]: {'[green]pass[/]' if r['passed'] else '[red]BLOCKED[/]'}")
 
 
+def _maybe_pause_on_failure(code: int) -> int:
+    """Hold an interactive window when the run failed, until Enter.
+
+    Launched from a shortcut or an app action, the command's console vanishes
+    with everything it printed — the red fail included; the launcher may also
+    host us through a transient shell, so console-ownership tricks don't hold.
+    When stdin is an interactive terminal, wait for Enter so the failure is
+    readable. Scripts and pipes (non-interactive stdin) never pause; set
+    ``SFACTORY_NO_PAUSE=1`` to opt out in a terminal too. The window itself is
+    opened by the launcher, not by sfactory — a terminal you keep open shows
+    everything inline and never sees the pause.
+    """
+    if code == 0 or not sys.stdin.isatty() or os.environ.get("SFACTORY_NO_PAUSE"):
+        return code
+    console.print("[red]the run failed[/] — [bold]press Enter to continue[/]")
+    try:
+        input()
+    except (EOFError, KeyboardInterrupt):
+        pass
+    return code
+
+
 def main() -> None:  # pragma: no cover
     """Console-script entry point (kept for `python -m` symmetry)."""
-    app()
+    code = 0
+    try:
+        app()
+    except SystemExit as exc:
+        code = int(exc.code or 0)
+    raise SystemExit(_maybe_pause_on_failure(code))
 
 
 if __name__ == "__main__":  # pragma: no cover

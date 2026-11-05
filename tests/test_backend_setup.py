@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import yaml
 
 from pisoftwarefactory import backend_setup, harnesses
 from pisoftwarefactory.config import FactoryConfig, load_config, save_config
@@ -19,12 +20,15 @@ from pisoftwarefactory.config import FactoryConfig, load_config, save_config
 def fake_harness(monkeypatch):
     monkeypatch.setattr(harnesses, "installed", lambda name: True)
     monkeypatch.setattr(harnesses, "binary", lambda name: name)
+    monkeypatch.setattr(harnesses, "spawn_argv", lambda name: [name])  # zcode's node/.cjs prefix
     # No test reaches the network: the endpoint catalog is a seam like the rest.
     monkeypatch.setattr(harnesses, "endpoint_models", lambda b: [])
     monkeypatch.setattr(harnesses, "harness_models", lambda name: [])
+    # Same for the loopback probe behind the interactive source question.
+    monkeypatch.setattr(backend_setup, "probe_local_endpoints", lambda: [])
     calls: list[list[str]] = []
 
-    def _stub_run_stream(argv, log, timeout=1, model="the agent", agent_credential=False, provider=""):
+    def _stub_run_stream(argv, log, timeout=1, model="the agent", agent_credential=False, provider="", quiet_note=""):
         calls.append(argv)
         log(f"  stub ran {argv[0]}")
         return (0, "OK")
@@ -55,7 +59,7 @@ def test_local_llama_path_registers_then_verifies_then_saves(tmp_path, fake_harn
     _project(tmp_path)
     code = backend_setup.run_backend(
         tmp_path, harness="pi", source="llama-local",
-        base_url="http://127.0.0.1:8080/v1", model="qwen3.5-9b",
+        base_url="http://127.0.0.1:8080/v1", model="qwen3.5-9b", verify=True,
         log=lambda _m: None, ask=_ask([]),
     )
     assert code == 0
@@ -70,7 +74,7 @@ def test_omp_choice_writes_yaml_and_the_omp_flag_shape(tmp_path, fake_harness):
     _project(tmp_path)
     code = backend_setup.run_backend(
         tmp_path, harness="omp", source="llama-local",
-        base_url="http://127.0.0.1:8080/v1", model="qwen3.5-9b",
+        base_url="http://127.0.0.1:8080/v1", model="qwen3.5-9b", verify=True,
         log=lambda _m: None, ask=_ask([]),
     )
     assert code == 0
@@ -82,14 +86,14 @@ def test_missing_credential_reports_the_login_command_and_changes_nothing(tmp_pa
     config = _project(tmp_path)
     before = (tmp_path / "factory.toml").read_text(encoding="utf-8")
 
-    def _failing(argv, log, timeout=1, model="the agent", agent_credential=False, provider=""):
+    def _failing(argv, log, timeout=1, model="the agent", agent_credential=False, provider="", quiet_note=""):
         return (1, "Error: No API key found for llamacpp")
 
     monkeypatch.setattr(backend_setup, "_run_stream", _failing)
     msgs: list[str] = []
     code = backend_setup.run_backend(
         tmp_path, harness="pi", source="llama-local",
-        base_url="http://127.0.0.1:8080/v1", model="qwen3.5-9b",
+        base_url="http://127.0.0.1:8080/v1", model="qwen3.5-9b", verify=True,
         log=msgs.append, ask=_ask([]),
     )
     assert code == 4
@@ -164,6 +168,129 @@ def test_unknown_source_number_is_told_back_not_swallowed(tmp_path, fake_harness
         backend_setup.run_backend(tmp_path, harness="pi", log=lambda _m: None, ask=_ask(["7"]))
 
 
+def test_a_preset_source_preanswers_the_endpoint_questions(tmp_path, fake_harness):
+    """`--source qoder` means openai-endpoint with the preset's answers — no URL/key prompts."""
+    _project(tmp_path)
+    asked: list[str] = []
+
+    def ask(text, default=None):
+        asked.append(text)
+        return default
+
+    code = backend_setup.run_backend(
+        tmp_path, harness="pi", source="qoder", model="qwen3-coder-plus",
+        log=lambda _m: None, ask=ask,
+    )
+    assert code == 0
+    assert asked == []
+    saved = load_config(tmp_path)
+    assert saved.backend.base_url == backend_setup.PRESETS["qoder"]["base_url"]
+    assert saved.backend.api_key_env == "QODER_API_KEY"
+    assert saved.backend.provider == "qoder"
+    block = json.loads((tmp_path / "pi-agent" / "models.json").read_text(encoding="utf-8"))
+    assert block["providers"]["qoder"]["baseUrl"].endswith(":8790/v1")
+
+
+def test_explicit_flags_win_over_a_preset(tmp_path, fake_harness):
+    _project(tmp_path)
+    backend_setup.run_backend(
+        tmp_path, harness="pi", source="qoder",
+        base_url="http://127.0.0.1:9999/v1", api_key_env="MY_KEY", model="m",
+        log=lambda _m: None, ask=_ask([]),
+    )
+    saved = load_config(tmp_path)
+    assert (saved.backend.base_url, saved.backend.api_key_env) == ("http://127.0.0.1:9999/v1", "MY_KEY")
+
+
+def test_yes_with_a_preset_runs_unattended(tmp_path, fake_harness):
+    _project(tmp_path)
+
+    def _no_ask(text, default=None):
+        raise AssertionError(f"--yes should not have asked {text!r}")
+
+    code = backend_setup.run_backend(
+        tmp_path, harness="pi", source="dashscope", yes=True,
+        log=lambda _m: None, ask=_no_ask,
+    )
+    assert code == 0
+    saved = load_config(tmp_path)
+    assert saved.backend.base_url == backend_setup.PRESETS["dashscope"]["base_url"]
+    assert saved.backend.api_key_env == "DASHSCOPE_API_KEY"
+
+
+def test_rerun_with_nothing_changed_skips_the_proof_but_still_saves(tmp_path, fake_harness):
+    """The proof already on file is the proof: a byte-identical re-run proves nothing new.
+
+    A local GGUF verify costs minutes; `--verify` exists precisely for when the
+    operator wants to pay them again.
+    """
+    _project(tmp_path)
+    common = {"harness": "pi", "source": "llama-local",
+              "base_url": "http://127.0.0.1:8080/v1", "model": "qwen3.5-9b"}
+    assert backend_setup.run_backend(tmp_path, verify=True, log=lambda _m: None, ask=_ask([]), **common) == 0
+    assert fake_harness, "the first run proves the setup"
+    fake_harness.clear()
+    msgs: list[str] = []
+    assert backend_setup.run_backend(tmp_path, log=msgs.append, ask=_ask([]), **common) == 0
+    assert fake_harness == []
+    assert any("unchanged" in m for m in msgs)
+    assert load_config(tmp_path).backend.model == "qwen3.5-9b"
+
+
+def test_verify_flag_rechecks_an_unchanged_backend(tmp_path, fake_harness):
+    _project(tmp_path)
+    common = {"harness": "pi", "source": "llama-local",
+              "base_url": "http://127.0.0.1:8080/v1", "model": "qwen3.5-9b"}
+    backend_setup.run_backend(tmp_path, log=lambda _m: None, ask=_ask([]), **common)
+    fake_harness.clear()
+    backend_setup.run_backend(tmp_path, verify=True, log=lambda _m: None, ask=_ask([]), **common)
+    assert len(fake_harness) == 1
+
+
+def test_success_prints_the_replay_one_liner(tmp_path, fake_harness):
+    _project(tmp_path)
+    msgs: list[str] = []
+    backend_setup.run_backend(
+        tmp_path, harness="pi", source="qoder", model="qwen3-coder-plus",
+        log=msgs.append, ask=_ask([]),
+    )
+    replays = [m for m in msgs if "replay elsewhere" in m]
+    assert len(replays) == 1
+    assert "--source openai-endpoint" in replays[0]
+    assert "--api-key-env QODER_API_KEY" in replays[0]
+    assert replays[0].rstrip().endswith("-y[/]")
+
+
+def test_a_live_endpoint_is_offered_and_its_preset_adopted(tmp_path, fake_harness, monkeypatch):
+    """Bare `sfactory backend` probes loopback first: pick 1 and the URL — plus the
+    matching preset's key env — are answered for you."""
+    _project(tmp_path)
+    qoder_url = backend_setup.PRESETS["qoder"]["base_url"]
+    monkeypatch.setattr(backend_setup, "probe_local_endpoints",
+                        lambda: [(qoder_url, ["qwen3-coder-plus", "qwen3.5", "a", "b", "c", "d"])])
+    code = backend_setup.run_backend(
+        tmp_path, harness="pi", log=lambda _m: None,
+        ask=_ask(["1", ""]),  # pick the live endpoint; Enter on the model question
+    )
+    assert code == 0
+    saved = load_config(tmp_path)
+    assert saved.backend.base_url == qoder_url
+    assert saved.backend.api_key_env == "QODER_API_KEY"
+    assert saved.backend.provider == "qoder"
+
+
+def test_skipping_the_live_menu_falls_through_to_the_source_question(tmp_path, fake_harness, monkeypatch):
+    _project(tmp_path)
+    monkeypatch.setattr(backend_setup, "probe_local_endpoints",
+                        lambda: [("http://127.0.0.1:1234/v1", ["lm-studio-model"])])
+    backend_setup.run_backend(
+        tmp_path, harness="pi", log=lambda _m: None,
+        ask=_ask(["", "2", "https://gw.example/v1", "K", "m"]),  # Enter skips the menu
+    )
+    saved = load_config(tmp_path)
+    assert (saved.backend.base_url, saved.backend.api_key_env) == ("https://gw.example/v1", "K")
+
+
 def test_harness_not_on_path_says_which_one_to_install(tmp_path, monkeypatch):
     _project(tmp_path)
     monkeypatch.setattr(harnesses, "installed", lambda name: False)
@@ -185,7 +312,7 @@ def test_verify_names_the_model_not_the_executable(monkeypatch):
     """
     seen: dict = {}
 
-    def fake_stream_agent(cmd, cwd, timeout_s, model, log=None, quiet_s=30, echo_text=False, agent_credential=False, provider=""):
+    def fake_stream_agent(cmd, cwd, timeout_s, model, log=None, quiet_s=30, echo_text=False, agent_credential=False, provider="", quiet_note=""):
         seen["model"] = model
         return (0, "OK", "")
 
@@ -236,3 +363,195 @@ def test_a_provider_pi_reports_unauthorized_for_still_hands_over_the_login(tmp_p
     )
 
     assert handovers == ["pi"]
+
+
+def test_the_check_line_names_the_command_but_never_the_key(tmp_path, fake_harness, monkeypatch):
+    _project(tmp_path)
+    monkeypatch.setenv("QODER_API_KEY", "sk-live-secret")
+    msgs: list[str] = []
+    backend_setup.run_backend(
+        tmp_path, harness="pi", source="qoder", model="m", verify=True,
+        log=msgs.append, ask=_ask([]),
+    )
+    assert not any("sk-live-secret" in m for m in msgs)
+    assert any("--api-key ***" in m for m in msgs)
+
+
+def test_a_failed_verify_prints_the_stage_checklist(tmp_path, fake_harness, monkeypatch):
+    """A red wall becomes 'stage 3': endpoint ✓, registry ✓, verify ✗."""
+    _project(tmp_path)
+    monkeypatch.setattr(harnesses, "endpoint_models", lambda b: ["qwen3-coder-plus"])
+
+    def _failing(argv, log, timeout=1, model="the agent", agent_credential=False, provider="", quiet_note=""):
+        return (1, "Error: 401 Unauthorized")
+
+    monkeypatch.setattr(backend_setup, "_run_stream", _failing)
+    msgs: list[str] = []
+    code = backend_setup.run_backend(
+        tmp_path, harness="pi", source="qoder", model="qwen3-coder-plus", verify=True,
+        log=msgs.append, ask=_ask([]),
+    )
+    assert code == 4
+    import re
+    joined = re.sub(r"\[/?(?:green|red|yellow|cyan|dim)?\]", "", " ".join(msgs))
+    assert "✓ endpoint /models" in joined and "✓ registry" in joined and "✗ verify prompt" in joined
+
+
+def test_a_silent_endpoint_is_marked_but_does_not_stop_the_setup(tmp_path, fake_harness):
+    _project(tmp_path)
+    msgs: list[str] = []
+    code = backend_setup.run_backend(
+        tmp_path, harness="pi", source="llama-local",
+        base_url="http://127.0.0.1:8080/v1", model="qwen3.5-9b", verify=True,
+        log=msgs.append, ask=_ask([]),
+    )
+    assert code == 0
+    import re
+    stripped = re.sub(r"\[/?(?:green|red|yellow|cyan|dim)?\]", "", " ".join(msgs))
+    assert "✗" in stripped and "/models did not answer" in stripped
+
+
+def test_show_reports_sync_and_never_writes(tmp_path, fake_harness):
+    _project(tmp_path)
+    common = {"harness": "pi", "source": "llama-local",
+              "base_url": "http://127.0.0.1:8080/v1", "model": "qwen3.5-9b"}
+    backend_setup.run_backend(tmp_path, verify=True, log=lambda _m: None, ask=_ask([]), **common)
+    registry = tmp_path / "pi-agent" / "models.json"
+    before = registry.read_text(encoding="utf-8")
+    msgs: list[str] = []
+    code = backend_setup.run_backend(tmp_path, show=True, log=msgs.append, ask=_ask([]), **common)
+    assert code == 0
+    assert any("registry in sync" in m for m in msgs)
+    assert registry.read_text(encoding="utf-8") == before
+
+
+def test_show_detects_drift_when_the_registry_was_edited_by_hand(tmp_path, fake_harness):
+    _project(tmp_path)
+    common = {"harness": "pi", "source": "llama-local",
+              "base_url": "http://127.0.0.1:8080/v1", "model": "qwen3.5-9b"}
+    backend_setup.run_backend(tmp_path, verify=True, log=lambda _m: None, ask=_ask([]), **common)
+    registry = tmp_path / "pi-agent" / "models.json"
+    data = json.loads(registry.read_text(encoding="utf-8"))
+    data["providers"]["llamacpp"]["baseUrl"] = "http://127.0.0.1:9999/v1"
+    registry.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    msgs: list[str] = []
+    code = backend_setup.run_backend(tmp_path, show=True, log=msgs.append, ask=_ask([]), **common)
+    assert code == 1
+    joined = " ".join(msgs)
+    assert "registry drift" in joined and "127.0.0.1:9999" in joined and "re-registers" in joined
+
+
+def test_zcode_skips_the_registry_and_saves_an_agent_credential(tmp_path, fake_harness):
+    """`--harness zcode` collapses to the agent-credential path: the CLI serves its own model."""
+    _project(tmp_path)
+    msgs: list[str] = []
+    code = backend_setup.run_backend(
+        tmp_path, harness="zcode", source="llama-local",
+        base_url="http://127.0.0.1:8080/v1", model="nominal",
+        log=msgs.append, ask=_ask([]),
+    )
+    assert code == 0
+    assert not (tmp_path / "pi-agent" / "models.json").exists()  # no registry written
+    assert not (tmp_path / "omp-agent" / "models.yml").exists()
+    saved = load_config(tmp_path)
+    assert (saved.harness.name, saved.backend.agent_credential) == ("zcode", True)
+    joined = " ".join(msgs)
+    assert "no provider registry is written" in joined
+    assert "the agent's own settings serve it" in joined
+    assert fake_harness and fake_harness[0][0] == "zcode"  # the proof ran through zcode
+
+
+def test_zcode_seed_command_uses_attach(tmp_path, fake_harness):
+    _project(tmp_path)
+    path = tmp_path / "paperclip.company.json"
+    path.write_text(json.dumps({"company": {"harness": {"name": "pi", "model": "old"}}}), encoding="utf-8")
+    backend_setup.run_backend(
+        tmp_path, harness="zcode", source="llama-local", model="nominal",
+        log=lambda _m: None, ask=_ask([]),
+    )
+    block = json.loads(path.read_text(encoding="utf-8"))["company"]["harness"]
+    assert block["command"] == "zcode -p --attach brief.md"
+
+
+def test_show_says_zcode_has_no_registry_to_check(tmp_path, fake_harness):
+    _project(tmp_path)
+    cfg = FactoryConfig()
+    cfg.harness.name = "zcode"
+    cfg.backend = cfg.backend.model_copy(update={"agent_credential": True})
+    save_config(cfg, tmp_path)
+    msgs: list[str] = []
+    code = backend_setup.run_backend(tmp_path, show=True, log=msgs.append, ask=_ask([]))
+    assert code == 0
+    assert any("no provider registry to check" in m for m in msgs)
+
+
+def test_provider_switch_reregisters_and_saves(tmp_path, fake_harness):
+    """`sfactory provider omp` keeps the backend, re-registers it for omp, proves it."""
+    _project(tmp_path)
+    msgs: list[str] = []
+    code = backend_setup.run_provider(
+        tmp_path, harness="omp", yes=True, log=msgs.append, ask=_ask([]),
+    )
+    assert code == 0
+    block = yaml.safe_load((tmp_path / "omp-agent" / "models.yml").read_text(encoding="utf-8"))
+    assert block["providers"]["llamacpp"]["baseUrl"] == "http://127.0.0.1:8080/v1"
+    saved = load_config(tmp_path)
+    assert saved.harness.name == "omp"
+    assert any("brain:" in m for m in msgs)
+    assert "already" not in " ".join(msgs)[:0]  # no-op guard below
+
+
+def test_provider_switch_to_zcode_writes_no_registry(tmp_path, fake_harness):
+    _project(tmp_path)
+    code = backend_setup.run_provider(tmp_path, harness="zcode", yes=True,
+                                      log=lambda _m: None, ask=_ask([]))
+    assert code == 0
+    assert not (tmp_path / "pi-agent" / "models.json").exists()
+    assert load_config(tmp_path).harness.name == "zcode"
+
+
+def test_provider_same_choice_is_a_polite_noop(tmp_path, fake_harness):
+    _project(tmp_path)  # default harness pi
+    msgs: list[str] = []
+    code = backend_setup.run_provider(tmp_path, harness="pi", yes=True,
+                                      log=msgs.append, ask=_ask([]))
+    assert code == 0
+    assert any("already" in m for m in msgs)
+
+
+def test_model_switch_picks_from_the_live_list_and_saves(tmp_path, fake_harness, monkeypatch):
+    _project(tmp_path)
+    monkeypatch.setattr(harnesses, "endpoint_models", lambda b: ["qwen3.5-9b", "deepseek-r1"])
+    code = backend_setup.run_model(
+        tmp_path, model="deepseek-r1", yes=True, log=lambda _m: None, ask=_ask([]),
+    )
+    assert code == 0
+    saved = load_config(tmp_path)
+    assert saved.backend.model == "deepseek-r1"
+    block = json.loads((tmp_path / "pi-agent" / "models.json").read_text(encoding="utf-8"))
+    assert block["providers"]["llamacpp"]["models"] == [{"id": "deepseek-r1"}]
+
+
+def test_model_for_zcode_is_honestly_refused(tmp_path, fake_harness):
+    """zcode serves its own model — the factory saying otherwise would be a lie."""
+    _project(tmp_path)
+    cfg = load_config(tmp_path)
+    cfg.harness.name = "zcode"
+    save_config(cfg, tmp_path)
+    msgs: list[str] = []
+    code = backend_setup.run_model(tmp_path, model="whatever", yes=True,
+                                   log=msgs.append, ask=_ask([]))
+    assert code == 1
+    assert any("ZCode app" in m for m in msgs)
+
+
+def test_model_off_catalog_warns_but_tries(tmp_path, fake_harness, monkeypatch):
+    _project(tmp_path)
+    monkeypatch.setattr(harnesses, "endpoint_models", lambda b: ["qwen3.5-9b"])
+    msgs: list[str] = []
+    code = backend_setup.run_model(
+        tmp_path, model="mystery-model", yes=True, log=msgs.append, ask=_ask([]),
+    )
+    assert code == 0
+    assert any("not in the endpoint's catalog" in m for m in msgs)
+    assert load_config(tmp_path).backend.model == "mystery-model"

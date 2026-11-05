@@ -592,13 +592,14 @@ def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
     gitignore = root / ".gitignore"
     # `factory.toml` is the machine's brain: `sfactory backend` rewrites it with
     # whatever model this box serves. Tracked, every provisioning run would leave
-    # the tree dirty and `sfactory release` would refuse it.
-    entries = ".factory/run/\n.factory/worktrees/\nfactory.toml\n"
+    # the tree dirty and `sfactory release` would refuse it. `.env` holds the
+    # endpoint key the config only names — never tracked either.
+    entries = ".factory/run/\n.factory/worktrees/\nfactory.toml\n.env\n"
     existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
     missing = "".join(e for e in entries.splitlines(keepends=True) if e not in existing)
     if missing:
         gitignore.write_text(existing + ("\n" if existing and not existing.endswith("\n") else "") + "# sfactory runtime state\n" + missing, encoding="utf-8")
-        log(f"  [green]wrote[/] {gitignore} (+ .factory/run/, .factory/worktrees/, factory.toml)")
+        log(f"  [green]wrote[/] {gitignore} (+ .factory/run/, .factory/worktrees/, factory.toml, .env)")
 
     # Baseline commit AFTER scaffolding so the factory files themselves are
     # committed (release refuses a dirty tree, and lane worktrees branch from it)

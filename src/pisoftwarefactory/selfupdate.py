@@ -67,7 +67,35 @@ def _ps_quote(value: str) -> str:
     return value.replace("'", "''")
 
 
-def _schedule_after_exit(uv: str, source: str, log_file: Path) -> None:
+def _stub_path() -> Path:
+    """Where the update placeholder lives: next to the real shim."""
+    bin_dir = os.environ.get("UV_TOOL_BIN_DIR") or str(Path.home() / ".local" / "bin")
+    return Path(bin_dir) / "sfactory.cmd"
+
+
+def _write_update_stub(version: str) -> Path | None:
+    """A placeholder that answers while uv has the real shim removed.
+
+    Windows resolves .exe before .cmd, so the stub only speaks during the
+    replace gap: instead of PowerShell's raw 'not recognized', the user sees
+    'update in progress' with a retry hint. A leftover stub is harmless — the
+    real exe out-ranks it the moment it exists — but the deferred helper
+    deletes it after the reinstall all the same.
+    """
+    stub = _stub_path()
+    try:
+        stub.parent.mkdir(parents=True, exist_ok=True)
+        stub.write_text(
+            f"@echo sfactory update in progress (installing {version}) - the command "
+            "returns in a few seconds, please retry.\n@exit /b 75\n",
+            encoding="ascii",
+        )
+        return stub
+    except OSError:
+        return None
+
+
+def _schedule_after_exit(uv: str, source: str, log_file: Path, stub: Path | None = None) -> None:
     """Run the reinstall detached, starting once this process is gone.
 
     Start-Process with native redirection (not `uv ... 2>&1 | Out-File`):
@@ -77,11 +105,13 @@ def _schedule_after_exit(uv: str, source: str, log_file: Path) -> None:
     ps = (
         f"Wait-Process -Id {os.getpid()} -Timeout 60 -ErrorAction SilentlyContinue; "
         f"Start-Process -FilePath '{_ps_quote(uv)}' "
-        f"-ArgumentList 'tool','install','--force','{_ps_quote(source)}' "
+        f"-ArgumentList 'tool','install','--force','--reinstall','{_ps_quote(source)}' "
         f"-NoNewWindow -Wait "
         f"-RedirectStandardOutput '{_ps_quote(str(log_file))}.out' "
         f"-RedirectStandardError '{_ps_quote(str(log_file))}'"
     )
+    if stub is not None:
+        ps += f"; Remove-Item -Force -ErrorAction SilentlyContinue '{_ps_quote(str(stub))}'"
     subprocess.Popen(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
         stdout=subprocess.DEVNULL,
@@ -89,6 +119,17 @@ def _schedule_after_exit(uv: str, source: str, log_file: Path) -> None:
         stdin=subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW,
     )
+
+
+def _target_version(source: str) -> str:
+    """The version being installed when the source is a local checkout."""
+    try:
+        for line in (Path(source) / "pyproject.toml").read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("version"):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return "a new version"
 
 
 def run_update(log=print) -> int:
@@ -119,12 +160,21 @@ def run_update(log=print) -> int:
     if os.name == "nt":
         # We are executing from the very exe uv must replace — an inline
         # attempt can only fail, and possibly half-replace the env first.
-        # Hand the whole job to the post-exit helper instead.
+        # Hand the whole job to the post-exit helper instead. While it runs,
+        # a .cmd placeholder answers for the missing shim (update in progress).
         log_file = Path(os.environ.get("TEMP", ".")) / "sfactory-update.log"
-        _schedule_after_exit(uv, source, log_file)
+        stub = _write_update_stub(_target_version(source))
+        _schedule_after_exit(uv, source, log_file, stub)
+        polite = (
+            "while it runs, `sfactory` answers 'update in progress' — retry in a "
+            "few seconds" if stub else
+            "for a few seconds `sfactory` may be 'not recognized' — wait ~5 s and "
+            "run the command again"
+        )
         log(
             "scheduled: the reinstall applies a moment after this command exits "
-            f"(sfactory.exe cannot replace itself while running).\n"
+            "(sfactory.exe cannot replace itself while running).\n"
+            f"{polite}.\n"
             f"verify with `sfactory --version`; raw output: {log_file}"
         )
         return 0

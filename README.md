@@ -169,7 +169,7 @@ Swap back by restoring `provider = "llamacpp"`,
 Re-running `init` without `--force` never overwrites your scaffolded files —
 it only re-registers the pi provider and re-probes the backend.
 
-### Worker brain: pi or omp, and where its model comes from (ADR-0017)
+### Worker brain: pi, omp or zcode, and where its model comes from (ADR-0017, ADR-0019)
 
 `sfactory backend` asks two questions and then **runs one real prompt through
 the agent it just configured** — so "saved" means "answered", not "the file
@@ -188,6 +188,24 @@ Sources: `llama-local` (your endpoint, mocked key — the default),
 `factory.toml`), `harness-login` (a provider the agent authenticates to itself).
 The model list comes from the live endpoint first, so you pick from what actually
 answers; if the endpoint is silent, the agent's own catalog is used.
+
+The key can live in a gitignored `.env` next to `factory.toml` — every command
+loads it, and it survives the shell that wrote it. When the env var is unset,
+the warning prints the exact command for *your* shell (PowerShell, cmd or
+POSIX) alongside the `.env` option.
+
+Presets are shorthand for well-known `openai-endpoint` targets — the URL and key
+env var are pre-answered, explicit flags still win:
+
+```powershell
+sfactory backend --source qoder -y      # local Qoder gateway on 127.0.0.1:8790/v1, key in QODER_API_KEY
+sfactory backend --source dashscope -y  # Alibaba DashScope (Qwen behind a key), key in DASHSCOPE_API_KEY
+```
+
+Run bare (interactive), it first probes known local ports — the qoder gateway,
+LM Studio, Ollama, vLLM — and offers what actually answers before asking about
+sources. Picking one pre-fills the URL and, when it matches a preset, the key
+env var too, so a running gateway is configured in two keystrokes.
 
 A provider the agent logs into itself is not an endpoint, so it gets no key at
 all — the mocked `--api-key none` that a local llama.cpp needs is exactly what
@@ -210,12 +228,33 @@ Nothing to edit by hand: the same command merges the provider into the harness's
 registry (`~/.pi/agent/models.json` for pi, `~/.omp/agent/models.yml` for omp —
 backed up once on the first write) and updates the Paperclip seed's `harness`
 block. A failed check leaves `factory.toml` untouched and prints the agent's own
-error with the next command to run.
+error with the next command to run. Re-running a byte-identical choice skips the
+proof (`--verify` re-checks anyway), and every success prints the one-liner that
+reproduces the choice on another machine.
 
 Note on Paperclip: its adapter set is fixed and no `omp` adapter, so with
 `--harness omp` the company's agents are hired on `pi_local` against the **same
 endpoint and model** (the command says so rather than pretending otherwise),
 while `sfactory run` / `sfactory wave` use omp.
+
+### zcode as the worker brain (ADR-0019)
+
+The ZCode Desktop app's bundled CLI works as a third harness — agent-credential
+by design: it serves whatever model its own settings or `zcode login` define,
+takes no `--model`/`--provider`/`--api-key` flags, and sfactory writes nothing
+into its configuration. `[backend]` is recorded but nominal.
+
+```powershell
+sfactory backend --harness zcode -y     # proves it with one real one-shot prompt
+sfactory run "Add rate limiting to the login endpoint"   # workers: -p --json --mode yolo
+```
+
+Workers attach the brief (`--attach`), reviewers run in `--mode plan` (read-only
+by construction). Caveats: no per-project model selection (switch models in
+ZCode's own settings), the Start plan's quota is sized for interactive use — a
+parallel wave can throttle it, so prefer single-lane runs or pay-per-token for
+sustained duty — and token/tool accounting reads zero until the CLI's `--json`
+schema is pinned (dispatch still decides done/blocked from git + exit code).
 
 ### What a run tells you (and what it refuses to claim)
 
@@ -422,7 +461,7 @@ to overwrite).
 | Command | Purpose |
 |---|---|
 | `sfactory init [--auto] [--langs …]` | scaffold the factory into a project |
-| `sfactory backend [--harness pi\|omp] [--source …] [-y]` | choose the worker brain and prove it answers |
+| `sfactory backend [--harness pi\|omp\|zcode] [--source …] [-y]` | choose the worker brain and prove it answers |
 | `sfactory doctor` | verify backend model/ctx + api key, node+harness, hindsight, paperclip, toolchains |
 | `sfactory run "task"` | one task through the whole pipeline |
 | `sfactory wave` | dispatch all ready nodes across lanes |

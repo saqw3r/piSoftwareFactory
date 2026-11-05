@@ -58,3 +58,32 @@ def test_reported_version_is_the_built_version():
     with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as fh:
         built = tomllib.load(fh)["project"]["version"]
     assert built == pisoftwarefactory.__version__
+
+
+def test_update_stub_answers_during_the_replace_gap(monkeypatch, tmp_path):
+    """While uv has the exe removed, a .cmd placeholder says 'update in progress'
+    instead of PowerShell's raw 'not recognized' — .exe out-ranks .cmd, so the
+    stub only ever speaks during the gap."""
+    from pisoftwarefactory import selfupdate
+
+    monkeypatch.setenv("UV_TOOL_BIN_DIR", str(tmp_path))
+    stub = selfupdate._write_update_stub("0.2.0")
+    assert stub is not None and stub.name == "sfactory.cmd"
+    text = stub.read_text(encoding="ascii")
+    assert "update in progress" in text and "0.2.0" in text and "exit /b 75" in text
+
+
+def test_scheduled_helper_removes_the_stub_after_reinstall(monkeypatch, tmp_path):
+    from pisoftwarefactory import selfupdate
+
+    monkeypatch.setenv("UV_TOOL_BIN_DIR", str(tmp_path))
+    stub = selfupdate._write_update_stub("0.2.0")
+    captured: dict = {}
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["ps"] = argv[-1]
+
+    monkeypatch.setattr(selfupdate.subprocess, "Popen", FakePopen)
+    selfupdate._schedule_after_exit("uv", str(tmp_path / "src"), tmp_path / "log", stub)
+    assert "Remove-Item" in captured["ps"] and "sfactory.cmd" in captured["ps"]
