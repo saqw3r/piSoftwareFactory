@@ -1,0 +1,14 @@
+{"task": "Check this repostiroy with sources and provide me back with dependency map, arch", "source": "real", "expected_kind": "chore"}
+{"task": "Generate me architecture view of the solution in C4 model. Output should be .md", "source": "real", "expected_kind": "docs"}
+{"task": "Add a short 'Development' section to ARCHITECTURE.md documenting how to build and test the solution (dotnet build, dotnet test), and commit the change.", "source": "real", "expected_kind": "docs"}
+{"task": "Add rate limiting to the login endpoint", "source": "probe", "expected_kind": "feature", "expected_risk": "high"}
+{"task": "Fix the crash when the checkout cart is empty on mobile", "source": "probe", "expected_kind": "bug"}
+{"task": "Rotate the leaked API token in the deploy pipeline and encrypt secrets in settings", "source": "probe", "expected_kind": "chore", "expected_risk": "high"}
+{"task": "Document the public API in README", "source": "probe", "expected_kind": "docs"}
+{"task": "Refactor the ordering module and bump the payment SDK dependency", "source": "probe", "expected_kind": "chore"}
+{"task": "Write unit tests for the discount calculator in Python", "source": "probe", "expected_kind": "feature", "expected_size": "small"}
+{"task": "Migrate the users table schema to add soft deletes", "source": "probe", "expected_kind": "chore", "expected_risk": "high"}
+{"task": "Update the contribution guidelines and changelog for the 2.1 release", "source": "probe", "expected_kind": "docs"}
+{"task": "Make the app better and faster", "source": "probe", "expected_kind": "abstain"}
+{"task": "do the thing we discussed", "source": "probe", "expected_kind": "abstain"}
+{"task": "Port the telemetry exporter from Rust to Go and wire it into the agent", "source": "probe", "expected_kind": "feature"}
