@@ -16,7 +16,7 @@ decision-gated workflow with an auditable trail.
 ## Decision
 
 1. All architectural and major product decisions are recorded as **ADRs** in
-   `decisions/NNNN-title.md` (this folder).
+   `docs/decisions/NNNN-title.md` (this folder).
 2. Workflow for every new major decision:
    - Write the ADR with `Status: Proposed` → commit.
    - **Submit to the owner** (AskUserQuestion or explicit review request)
@@ -37,7 +37,7 @@ decision-gated workflow with an auditable trail.
 
 - Implementation pauses at decision checkpoints; the agent may batch
   non-major, reversible implementation details without ceremony.
-- `decisions/` is committed from day one and ships with the repo, so the
+- `docs/decisions/` is committed from day one and ships with the repo, so the
   one-liner scaffold can also seed an ADR folder in target projects
   (factory dogfoods its own governance).
 - "Major" means: architecture, tool/harness choice, data formats, security

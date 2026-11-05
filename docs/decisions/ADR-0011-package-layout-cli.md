@@ -31,7 +31,7 @@ engine. Name and layout should be settled before any code.
    F:\SoftwareFactory\
    ├── pyproject.toml            # uv/PEP 517 build; console script `sfactory`
    ├── README.md, LICENSE (MIT), .gitignore
-   ├── decisions/                # this ADR folder (governance, ADR-0008)
+   ├── docs/decisions/                # this ADR folder (governance, ADR-0008)
    ├── src/sfactory/
    │   ├── cli.py                # typer app, command set below
    │   ├── config.py             # factory.toml pydantic model + loader

@@ -5,7 +5,7 @@ pipeline (Intake → Brief → Dispatch → Execute → Gates → Review → Rel
 Reflect) on headless pi workers served by the owner's llama.cpp, with
 deterministic verification gates, Hindsight memory, and Paperclip governance.
 
-Architecture decisions live in ``decisions/`` (ADR-0001..).
+Architecture decisions live in ``docs/decisions/`` (ADR-0001..).
 """
 
 from __future__ import annotations

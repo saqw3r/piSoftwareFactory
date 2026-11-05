@@ -14,7 +14,7 @@ uvx --from git+https://github.com/saqw3r/piSoftwareFactory sfactory init --auto
 - **Worker harness**: [pi coding agent](https://github.com/badlogic/pi-mono) headless (`--mode json` workers, `--print --tools read,grep,find,ls` reviewers)
 - **Multi-agent management**: [Paperclip](https://github.com/paperclipai/paperclip) companies (Architect → per-lane Workers → Reviewer)
 - **Memory**: [Hindsight](https://github.com/vectorize-io/hindsight) (retain / recall / reflect, per-repo banks, MCP endpoint)
-- **Intake decisions**: [Jev](https://pypi.org/project/jev/) typed, confidence-scored, abstaining (optional; deterministic heuristic fallback)
+- **Intake decisions**: typed, confidence-scored, abstaining — local model (ADR-0020, measured 10/14 vs the heuristic's 7/14) with a deterministic heuristic fallback; hosted Jev researched and declined ([why](docs/decisions/ADR-0020-typed-intake-local-model.md))
 
 ## Getting started
 
@@ -198,6 +198,8 @@ Presets are shorthand for well-known `openai-endpoint` targets — the URL and k
 env var are pre-answered, explicit flags still win:
 
 ```powershell
+sfactory backend --source llamacpp -y   # local llama.cpp / llama-router (:8080, mocked key)
+sfactory backend --source ollama -y     # local Ollama (:11434, mocked key)
 sfactory backend --source qoder -y      # local Qoder gateway on 127.0.0.1:8790/v1, key in QODER_API_KEY
 sfactory backend --source dashscope -y  # Alibaba DashScope (Qwen behind a key), key in DASHSCOPE_API_KEY
 ```
@@ -246,8 +248,16 @@ into its configuration. `[backend]` is recorded but nominal.
 
 ```powershell
 sfactory backend --harness zcode -y     # proves it with one real one-shot prompt
+sfactory provider omp                   # quick switch: pi | omp | zcode — proved before saved
+sfactory model deepseek-r1              # pick the model from the live catalog
 sfactory run "Add rate limiting to the login endpoint"   # workers: -p --json --mode yolo
 ```
+
+Two guardrails worth knowing: pi 1.5.0 validates its `models.json` and rejects
+the whole file over one empty apiKey — the factory writes placeholders and
+auto-repairs stale empty keys before every merge; and `agent_credential` is a
+zcode-era record — switching to pi/omp clears it, because those harnesses take
+the key at runtime again.
 
 Workers attach the brief (`--attach`), reviewers run in `--mode plan` (read-only
 by construction). Caveats: no per-project model selection (switch models in
@@ -423,7 +433,8 @@ Optional: remove the provider block the scaffold added to
 **Intake → Brief → Dispatch → Execute → Gates → Review → Release → Reflect**
 
 - Intake classifies every task into a node of `launch.graph.json` (kind, risk
-  tier, lane, blockers) — Jev when configured, heuristics otherwise.
+  tier, lane, blockers) — typed intake when configured (ADR-0020: local model,
+  hosted Jev declined), heuristics otherwise.
 - Workers execute elements on **lane git worktrees**: *1 element = 1 commit*,
   20–30 minutes each, docs committed with code.
 - **Gates are deterministic** and per-language; agent claims are never
@@ -462,6 +473,8 @@ to overwrite).
 |---|---|
 | `sfactory init [--auto] [--langs …]` | scaffold the factory into a project |
 | `sfactory backend [--harness pi\|omp\|zcode] [--source …] [-y]` | choose the worker brain and prove it answers |
+| `sfactory provider [pi\|omp\|zcode]` | switch the brain, keep the backend — proved before saved |
+| `sfactory model [id]` | choose the model from the live catalog (zcode: refused — its own app decides) |
 | `sfactory doctor` | verify backend model/ctx + api key, node+harness, hindsight, paperclip, toolchains |
 | `sfactory run "task"` | one task through the whole pipeline |
 | `sfactory wave` | dispatch all ready nodes across lanes |
@@ -491,7 +504,7 @@ events; gate feedback truncated head+tail.
 ## Governance
 
 Every architectural and major product decision is recorded as an ADR in
-[`decisions/`](decisions/) (ADR-0001…0016) — proposed, approved by the
+[`docs/decisions/`](docs/decisions/) (ADR-0001…0020) — proposed, approved by the
 owner, then implemented. See `ADR-0008-governance.md`. Scaffolded projects
 inherit the pattern (`memory/decisions.md`).
 
