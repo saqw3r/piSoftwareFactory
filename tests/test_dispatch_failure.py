@@ -337,3 +337,33 @@ def test_the_dispatch_line_names_what_serves_the_model(monkeypatch, tmp_path):
 
     assert "ovh-free/gpt-oss-120b @ freeflow" in msgs[0]
     assert "127.0.0.1" not in msgs[0]
+
+
+def test_zcode_worker_command_carries_no_model_or_key_flags(monkeypatch, tmp_path):
+    """zcode serves its own model — --provider/--model/--api-key do not exist to pass (ADR-0019)."""
+    monkeypatch.setattr(pi_agent, "spawn_argv", lambda name: ["zcode"])
+    brief = tmp_path / "b.md"
+    brief.write_text("task", encoding="utf-8")
+    cmd = " ".join(pi_agent._worker_command(_config("zcode"), brief))
+    assert cmd.startswith("zcode --mode yolo --json -p ")
+    assert "--attach" in cmd and str(brief) in cmd
+    for absent in ("--api-key", "--provider", "--model", "--no-session"):
+        assert absent not in cmd
+
+
+def test_zcode_reviewer_runs_plan_mode_with_the_prompt_inline(monkeypatch):
+    monkeypatch.setattr(pi_agent, "spawn_argv", lambda name: ["zcode"])
+    cmd = " ".join(pi_agent._reviewer_command(_config("zcode"), "review this diff"))
+    assert cmd.startswith("zcode --mode plan -p ")
+    assert "review this diff" in cmd
+    assert "--json" not in cmd  # the reviewer's verdict is read from plain text
+
+
+def test_brain_label_names_the_truth_per_harness():
+    """The progress lines must never print the nominal [backend] for zcode —
+    it names a model the run never touches (observed: qwen3.5-9b @ llamacpp
+    while Nemotron served the turn)."""
+    from pisoftwarefactory.integrations.pi_agent import brain_label
+
+    assert brain_label(_config("zcode")) == "zcode CLI's own configured model"
+    assert brain_label(_config("pi")) == "qwen3.5-9b @ http://127.0.0.1:8080/v1"

@@ -14,7 +14,8 @@ from pathlib import Path
 
 from rich.table import Table
 
-from .config import FactoryConfig, load_config
+from . import harnesses
+from .config import FactoryConfig, export_hint, load_config
 from .integrations import hindsight, paperclip
 from .integrations.llama import probe_backend
 
@@ -32,7 +33,8 @@ def _run_version(argv: tuple[str, ...]) -> str | None:
     if binary is None:
         return None
     try:
-        proc = subprocess.run((binary, *argv[1:]), capture_output=True, text=True, timeout=15)
+        proc = subprocess.run((binary, *argv[1:]), capture_output=True, text=True, timeout=15,
+                              creationflags=harnesses.no_window())
         out = (proc.stdout or proc.stderr).strip().splitlines()
         return out[0] if out else "installed"
     except Exception:  # noqa: BLE001
@@ -63,15 +65,15 @@ def run_doctor(root: Path, log) -> int:  # pragma: no cover - interactive output
     else:
         checks.append(Check("node", "fail", "missing", "install Node.js 24.11+ (pi + Paperclip)"))
 
-    # The chosen worker brain (ADR-0017: pi or omp — either one, per project)
+    # The chosen worker brain (ADR-0017/ADR-0019: pi, omp or zcode — one per project)
     harness = config.harness.name if config else "pi"
-    other = "omp" if harness == "pi" else "pi"
-    version = _run_version((harness, "--version")) or "missing"
+    others = [h for h in harnesses.HARNESSES if h != harness]
+    version = _run_version((*harnesses.spawn_argv(harness), "--version")) or "missing"
     checks.append(
         Check(f"harness: {harness}", "ok" if version != "missing" else "fail", version,
               f"`sfactory backend --harness {harness}` configures it, or switch with "
-              f"`sfactory backend --harness {other}`"
-              if version == "missing" else f"the other harness ({other}) is also selectable")
+              f"`sfactory backend --harness {others[0]}`"
+              if version == "missing" else f"the other harnesses ({', '.join(others)}) are also selectable")
     )
 
     # Backend (critical) — generalized URL + key (llama.cpp default, OpenAI-compatible swap-in)
@@ -82,7 +84,7 @@ def run_doctor(root: Path, log) -> int:  # pragma: no cover - interactive output
                 checks.append(Check("backend api key", "ok", f"${config.backend.api_key_env} is set"))
             else:
                 checks.append(Check("backend api key", "warn", f"${config.backend.api_key_env} is not set",
-                                      f"export {config.backend.api_key_env}=... (pi sends it as apiKey to {config.backend.base_url})"))
+                                      f"{export_hint(config.backend.api_key_env)} (pi sends the key as apiKey to {config.backend.base_url})"))
         try:
             info = probe_backend(config.backend.base_url)
             if info.healthy:
@@ -131,7 +133,7 @@ def run_doctor(root: Path, log) -> int:  # pragma: no cover - interactive output
     critical_fail = False
     for c in checks:
         style = {"ok": "green", "warn": "yellow", "fail": "red"}[c.state]
-        if c.state == "fail" and (c.name.endswith("backend") or c.name == "pi harness"):
+        if c.state == "fail" and (c.name.endswith("backend") or c.name.startswith("harness:")):
             critical_fail = True
         table.add_row(c.name, f"[{style}]{c.state}[/]", c.detail, c.hint)
     log(table)

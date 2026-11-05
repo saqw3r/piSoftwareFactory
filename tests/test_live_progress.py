@@ -190,3 +190,47 @@ def test_heartbeat_repeats_while_the_model_is_silent(monkeypatch, quiet_s):
     msgs: list[str] = []
     stream_agent(["pi"], None, 2, "slow-model", log=msgs.append, quiet_s=quiet_s)
     assert sum("with no event" in m for m in msgs) >= 1
+
+
+def test_stream_agent_fails_fast_on_a_refused_connection(monkeypatch):
+    """ECONNREFUSED is definitive — nothing is listening. The harness's own retry
+    loop would burn the whole budget; watching stderr turns 12 silent minutes
+    into a fast failure that carries the remedy."""
+    proc = FakeProc(lines=['{"type":"agent_start"}\n'], delay=0.4,
+                    stderr_text="Error: connect ECONNREFUSED 127.0.0.1:8080\n")
+    _install(monkeypatch, proc)
+    rc, out, err = stream_agent(["agent"], None, timeout_s=60, model="m", quiet_s=5)
+    assert rc == 1
+    assert "ECONNREFUSED" in err
+    assert proc.killed
+
+
+def test_quiet_note_replaces_the_automatic_reason(monkeypatch):
+    """zcode's [backend] model is nominal — printing it with the free-tier excuse
+    would send the operator to the wrong box; the caller knows the real story."""
+    proc = FakeProc(lines=[], delay=2.5)  # quiet longer than quiet_s, then EOF
+    _install(monkeypatch, proc)
+    seen: list[str] = []
+    stream_agent(["agent"], None, timeout_s=30, model="nominal", log=seen.append,
+                 quiet_s=0.2, quiet_note="zcode's configured model is not answering")
+    assert any("zcode's configured model is not answering" in m for m in seen)
+    assert not any("nominal is quiet" in m or "free-tier" in m for m in seen)
+
+
+def test_agent_spawns_without_console_windows(monkeypatch):
+    """A console child with no console to inherit flashes a visible window and
+    dies — one per helper the CLI spawns. The whole tree shares one invisible
+    console instead; interactive spawns (login handover) stay attached."""
+    import os
+    import subprocess
+
+    seen: dict = {}
+
+    def _popen(cmd, **kwargs):
+        seen.update(kwargs)
+        return FakeProc(lines=[])
+
+    monkeypatch.setattr(pi_agent, "_POPEN", _popen)
+    stream_agent(["agent"], None, timeout_s=5, model="m")
+    expected = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    assert seen.get("creationflags") == expected

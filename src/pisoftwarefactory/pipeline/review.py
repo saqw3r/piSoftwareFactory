@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .. import gitcmd
 from ..config import FactoryConfig
-from ..integrations.pi_agent import run_reviewer
+from ..integrations.pi_agent import brain_label, run_reviewer
 from .graph import Node
 
 VERDICTS = ("clean", "nits", "blockers")
@@ -120,8 +120,7 @@ def review_node(root: Path, node: Node, config: FactoryConfig, cwd: Path | None 
     for attempt in range(2):
         if log:
             log(f"  reviewer turn {attempt + 1}: {config.harness.name} reading "
-                f"{len(diff or '')} chars of diff ({config.backend.model} @ "
-                f"{config.backend.provider if config.backend.agent_credential else config.backend.base_url})")
+                f"{len(diff or '')} chars of diff ({brain_label(config)})")
         run = run_reviewer(prompt, config, cwd=cwd or root, log=log)
         node.verdict = parse_verdict(run.final_text or "")
         node.notes = (run.final_text or "")[-2000:]

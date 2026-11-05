@@ -1,9 +1,16 @@
-"""coding-agent wrapper (ADR-0002/ADR-0017): pi or omp, one JSONL reader.
+"""coding-agent wrapper (ADR-0002/ADR-0017/ADR-0019): pi, omp and zcode.
 
 Workers run ``<agent> --mode json`` (JSONL events → orchestrator parses progress
 and token usage); reviewers run ``<agent> --print --tools read,grep,find,ls``
 (fresh-context, read-only). Events are parsed defensively: the orchestrator
 never depends on the agent's internal event schema beyond ``type`` and ``usage``.
+
+zcode (ADR-0019) has no ``--model``/``--provider``/``--api-key`` flags at all —
+it serves whatever model its own settings or ``zcode login`` define. Workers
+run ``-p … --json --mode yolo`` with the brief attached; reviewers run
+``-p … --mode plan`` (read-only by construction). Its ``--json`` schema is not
+pinned yet, so the parser only makes a best-effort final-text extraction and
+leaves token/tool accounting to a follow-up once captured live.
 """
 
 from __future__ import annotations
@@ -14,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config import FactoryConfig
-from ..harnesses import binary, installed, selectable_model_id
+from ..harnesses import HARNESSES, binary, installed, no_window, selectable_model_id, spawn_argv
 
 
 class PiError(RuntimeError):
@@ -126,6 +133,70 @@ def _parse_events(stdout: str) -> PiRun:
     return run
 
 
+_ZCODE_WORKER_PROMPT = ("Work on the task described in the attached brief, in this working "
+                        "directory, following all of its instructions.")
+
+_ZCODE_QUIET_NOTE = ("zcode's configured model is not answering — the CLI retries with "
+                     "backoff until the budget; check the model/provider in the ZCode app "
+                     "settings, or `zcode login`")
+
+# A refused connection (or a missing provider config) is definitive: nothing is
+# listening on the other end, and the harness's own retry loop can burn the whole
+# budget before it gives up. Watching stderr for the marker turns a 12-minute
+# silent wait into a fast failure with the remedy attached.
+_FATAL_STDERR_MARKERS = ("ECONNREFUSED", "无法定位 CLI")
+
+
+def brain_label(config: FactoryConfig) -> str:
+    """What actually thinks, per harness — never the nominal [backend] record.
+
+    pi/omp are pointed at an endpoint by the factory, so provider/model is the
+    truth. zcode serves whatever its own settings (or `zcode login`) define;
+    printing the nominal [backend] there would name a model the run never
+    touches (observed: qwen3.5-9b @ llamacpp while Nemotron served the turn).
+    """
+    if config.harness.name == "zcode":
+        return "zcode CLI's own configured model"
+    b = config.backend
+    serves = b.provider if b.agent_credential else b.base_url
+    return f"{b.model} @ {serves}"
+
+
+def _zcode_command(config: FactoryConfig, mode: str) -> list[str]:
+    """zcode argv base (ADR-0019): the model flags simply do not exist here.
+
+    The worker gets ``--mode yolo`` (unattended, full tools — the ``-p`` default,
+    made explicit) plus ``--json``; the reviewer gets ``--mode plan``, read-only
+    by construction. There is no ``--no-session`` equivalent to pass.
+    """
+    cmd = [*spawn_argv("zcode"), "--mode", "yolo" if mode == "json" else "plan"]
+    if mode == "json":
+        cmd += ["--json"]
+    return cmd
+
+
+def _zcode_final_text(stdout: str) -> str:
+    """Best-effort final text from zcode's ``--json`` output (schema not yet pinned).
+
+    Accepts a single JSON object with a text-shaped result field, falls back to
+    the raw stream otherwise. Capturing a real run will tighten this (ADR-0019
+    follow-up: token and tool accounting stay zero until then).
+    """
+    try:
+        payload = json.loads(stdout)
+    except ValueError:
+        return stdout[-4000:]
+    if isinstance(payload, dict):
+        for key in ("result", "text", "output"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        message = payload.get("message")
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            return message["content"]
+    return stdout[-4000:]
+
+
 def _base_command(config: FactoryConfig, mode: str) -> list[str]:
     """Build the agent command line for the configured harness (ADR-0017).
 
@@ -142,7 +213,8 @@ def _base_command(config: FactoryConfig, mode: str) -> list[str]:
     """
     name = config.harness.name
     if not installed(name):
-        other = "omp" if name == "pi" else "pi"
+        others = [h for h in HARNESSES if h != name]
+        other = next((h for h in others if installed(h)), others[0])
         raise PiError(
             f"{name} not found on PATH — install it, or switch with `sfactory backend --harness {other}`"
         )
@@ -232,7 +304,8 @@ def _quiet_reason(model: str, agent_credential: bool, provider: str) -> str:
 
 def stream_agent(cmd: list[str], cwd: Path | None, timeout_s: int, model: str,
                  log=None, quiet_s: float = 45.0, echo_text: bool = False,
-                 agent_credential: bool = False, provider: str = "") -> tuple[int, str, str]:
+                 agent_credential: bool = False, provider: str = "",
+                 quiet_note: str = "") -> tuple[int, str, str]:
     """Run an agent command, echoing progress as events land; returns (rc, stdout, stderr).
 
     Shared with `sfactory backend`, which asks the agent one question and must
@@ -240,6 +313,8 @@ def stream_agent(cmd: list[str], cwd: Path | None, timeout_s: int, model: str,
     text, so ``echo_text`` passes every line through instead of only the JSON
     ones. Both pipes are drained on their own threads: pi writes warnings to
     stderr, and a full stderr pipe would deadlock a worker that is otherwise fine.
+    ``quiet_note`` replaces the automatic quiet-line reason where the caller
+    knows better (zcode's nominal [backend] model would be printed otherwise).
     """
     import queue
     import threading
@@ -249,9 +324,11 @@ def stream_agent(cmd: list[str], cwd: Path | None, timeout_s: int, model: str,
     proc = _POPEN(
         cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, errors="replace", bufsize=1, encoding="utf-8",
+        creationflags=no_window(),
     )
     lines: queue.Queue[str | None] = queue.Queue()
     err: list[str] = []
+    dead = threading.Event()
 
     def pump() -> None:
         assert proc.stdout is not None
@@ -261,7 +338,10 @@ def stream_agent(cmd: list[str], cwd: Path | None, timeout_s: int, model: str,
 
     def drain_stderr() -> None:
         assert proc.stderr is not None
-        err.extend(proc.stderr.readlines())
+        for line in proc.stderr:
+            err.append(line)
+            if any(marker in line for marker in _FATAL_STDERR_MARKERS):
+                dead.set()
 
     threading.Thread(target=pump, daemon=True).start()
     threading.Thread(target=drain_stderr, daemon=True).start()
@@ -279,8 +359,13 @@ def stream_agent(cmd: list[str], cwd: Path | None, timeout_s: int, model: str,
             minutes = timeout_s / 60
             spent = f"{minutes:.0f} min" if minutes >= 1 else f"{timeout_s}s"
             return (124, "".join(out), f"timed out after {spent} waiting for {model}")
+        if dead.is_set():
+            proc.kill()
+            proc.wait()
+            return (1, "".join(out), "".join(err))
         if log and now - last_sight > quiet_s:
-            log(f"    │ … {now - started:.0f}s with no event — [bold]{_quiet_reason(model, agent_credential, provider)}[/]")
+            note = quiet_note or _quiet_reason(model, agent_credential, provider)
+            log(f"    │ … {now - started:.0f}s with no event — [bold]{note}[/]")
             last_sight = now
         try:
             line = lines.get(timeout=poll)
@@ -314,18 +399,41 @@ def stream_agent(cmd: list[str], cwd: Path | None, timeout_s: int, model: str,
     return (proc.returncode or 0, "".join(out), "".join(err))
 
 
-def run_worker(brief_path: Path, config: FactoryConfig, cwd: Path, log=None) -> PiRun:
-    """Execute one element from a rendered brief; JSON events stream to us, live."""
+def _worker_command(config: FactoryConfig, brief_path: Path) -> list[str]:
+    """Full worker argv per harness: pi/omp take the brief as an @-include."""
+    if config.harness.name == "zcode":
+        cmd = _zcode_command(config, config.harness.worker_mode)
+        cmd += ["-p", _ZCODE_WORKER_PROMPT, "--attach", str(brief_path)]
+        return cmd
     cmd = _base_command(config, config.harness.worker_mode)
     cmd.append(f"@{brief_path}")
+    return cmd
+
+
+def _reviewer_command(config: FactoryConfig, prompt: str) -> list[str]:
+    """Full reviewer argv per harness (fresh context, read-only)."""
+    if config.harness.name == "zcode":
+        return [*_zcode_command(config, config.harness.review_mode), "-p", prompt]
+    cmd = _base_command(config, config.harness.review_mode)
+    cmd.append(prompt)
+    return cmd
+
+
+def run_worker(brief_path: Path, config: FactoryConfig, cwd: Path, log=None) -> PiRun:
+    """Execute one element from a rendered brief; JSON events stream to us, live."""
+    cmd = _worker_command(config, brief_path)
+    zcode = config.harness.name == "zcode"
     started = __import__("time").monotonic()
     rc, stdout, stderr = stream_agent(cmd, cwd, config.harness.worker_timeout_min * 60,
                                       config.backend.model, log=log, agent_credential=config.backend.agent_credential,
-                                      provider=config.backend.provider)
+                                      provider=config.backend.provider,
+                                      quiet_note=_ZCODE_QUIET_NOTE if zcode else "")
     run = _parse_events(stdout)
     run.returncode = rc
     if not run.final_text and stdout and not stdout.lstrip().startswith("{"):
         run.final_text = stdout  # print-mode fallback
+    if config.harness.name == "zcode" and not run.final_text and stdout.strip():
+        run.final_text = _zcode_final_text(stdout)  # --json shape not pinned yet
     if rc != 0 and stderr:
         run.final_text = (run.final_text + "\n" + stderr).strip()
     run.duration_s = __import__("time").monotonic() - started
@@ -340,13 +448,14 @@ def run_reviewer(prompt: str, config: FactoryConfig, cwd: Path, timeout_min: int
     four minutes is indistinguishable from a hang, and the reviewer is the one
     stage nobody can inspect, so it has to narrate itself.
     """
-    cmd = _base_command(config, config.harness.review_mode)
-    cmd.append(prompt)
+    cmd = _reviewer_command(config, prompt)
     started = __import__("time").monotonic()
     rc, stdout, stderr = stream_agent(cmd, cwd, timeout_min * 60, config.backend.model,
                                       log=log, echo_text=True,
                                       agent_credential=config.backend.agent_credential,
-                                      provider=config.backend.provider)
+                                      provider=config.backend.provider,
+                                      quiet_note=_ZCODE_QUIET_NOTE
+                                      if config.harness.name == "zcode" else "")
     run = _parse_events(stdout)
     run.returncode = rc
     run.final_text = stdout.strip() if stdout else (stderr or "").strip()

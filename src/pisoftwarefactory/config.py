@@ -62,9 +62,14 @@ class Backend(BaseModel):
 
 
 class Harness(BaseModel):
-    """Worker/reviewer coding agent (ADR-0002, ADR-0017: pi or omp — same shape)."""
+    """Worker/reviewer coding agent (ADR-0002, ADR-0017, ADR-0019).
 
-    name: Literal["pi", "omp"] = "pi"
+    pi and omp take a provider registry + URL/key; zcode serves whatever model
+    its own settings (or ``zcode login``) define — ``[backend]`` is recorded
+    but nominal for it, and the proof is one real one-shot prompt.
+    """
+
+    name: Literal["pi", "omp", "zcode"] = "pi"
     worker_mode: Literal["json", "print"] = "json"
     review_mode: Literal["print", "json"] = "print"
     worker_timeout_min: int = 40
@@ -128,6 +133,45 @@ class FactoryConfig(BaseModel):
     gates: Gates = Field(default_factory=Gates)
 
 
+def load_env_file(root: Path) -> list[str]:
+    """Load ``root/.env`` into the process environment — never overriding it.
+
+    The key belongs in the environment (factory.toml stores only the env var's
+    *name*), but an ``export`` dies with its shell and Windows has three shells
+    that forget it differently. A gitignored ``.env`` next to ``factory.toml``
+    is the per-project place the key actually persists, so every command that
+    loads the config also loads it. Values already in the environment win.
+    """
+    path = root / ".env"
+    if not path.is_file():
+        return []
+    loaded: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        name, value = name.strip(), value.strip().strip("'\"")
+        if name and name not in os.environ:
+            os.environ[name] = value
+            loaded.append(name)
+    return loaded
+
+
+def export_hint(env_var: str) -> str:
+    """A shell-correct command that sets *env_var* — PowerShell, cmd or POSIX.
+
+    The unset-key warning used to say "export X=..." on machines where export is
+    not a thing. The fix must match the shell that has to run it; the gitignored
+    .env is offered as the option that survives all of them.
+    """
+    if os.name == "nt":
+        if os.environ.get("PSModulePath"):
+            return f"$env:{env_var} = '…' (this shell) or add {env_var}=… to .env"
+        return f"set {env_var}=… (this shell) / setx {env_var} … (permanent) or add {env_var}=… to .env"
+    return f"export {env_var}=… (or add {env_var}=… to .env)"
+
+
 def load_config(root: Path) -> FactoryConfig:
     """Load ``factory.toml`` from *root* (the factory project directory)."""
     path = root / FACTORY_TOML
@@ -137,6 +181,7 @@ def load_config(root: Path) -> FactoryConfig:
         )
     with path.open("rb") as fh:
         raw = tomllib.load(fh)
+    load_env_file(root)  # key resolution happens later, at resolve_api_key() call sites
     return FactoryConfig.model_validate(raw)
 
 

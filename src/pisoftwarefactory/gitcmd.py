@@ -14,6 +14,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from .harnesses import no_window
+
 
 class GitRefused(RuntimeError):
     """git would not run. Distinct from "ran, and the answer is empty"."""
@@ -33,6 +35,7 @@ def run(root: Path, *args: str, check: bool = True, env: dict[str, str] | None =
         text=True,
         check=False,
         env=env,
+        creationflags=no_window(),
     )
     if check and proc.returncode != 0:
         raise GitRefused(_reason(root, args, proc))

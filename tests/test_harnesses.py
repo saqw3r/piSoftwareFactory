@@ -112,3 +112,91 @@ def test_login_handoff_is_the_harness_own_command(monkeypatch):
     assert harnesses.login_argv("omp") == ["omp", "login"]
     assert harnesses.login_argv("pi") == ["pi"]
     assert "/login" in harnesses.login_hint("pi")
+
+
+def test_mask_argv_hides_the_runtime_key():
+    """The key rides in the worker command line; the first argv log must not leak it."""
+    from pisoftwarefactory.harnesses import mask_argv
+
+    argv = ["pi", "--provider", "qoder", "--model", "m", "--api-key", "sk-live-secret",
+            "--print", "Reply with exactly: OK"]
+    masked = mask_argv(argv)
+    assert "sk-live-secret" not in " ".join(masked)
+    assert masked[-2:] == argv[-2:]  # everything except the key survives
+    assert argv == argv  # the caller's list is not mutated
+
+
+def test_zcode_has_no_registry_and_refuses_to_invent_one():
+    """sfactory never writes into zcode's configuration — its model is its own business."""
+    assert harnesses.has_registry("zcode") is False
+    with pytest.raises(harnesses.HarnessError, match="no provider registry"):
+        harnesses.registry_path("zcode")
+
+
+def test_zcode_spawns_through_the_desktop_bundle(monkeypatch, tmp_path):
+    """No PATH shim: the .cjs is launched with a node prefix (ADR-0019)."""
+    cjs = tmp_path / "zcode.cjs"
+    cjs.write_text("/**/", encoding="utf-8")
+    monkeypatch.setattr(harnesses.shutil, "which", lambda name: None)
+    monkeypatch.setattr(harnesses, "_zcode_cjs", lambda: cjs)
+    argv = harnesses.spawn_argv("zcode")
+    assert argv == ["node", str(cjs)]
+    assert harnesses.installed("zcode") is True
+    monkeypatch.setattr(harnesses, "_zcode_cjs", lambda: tmp_path / "absent.cjs")
+    assert harnesses.installed("zcode") is False
+
+
+def test_zcode_prefers_the_path_shim_when_one_exists(monkeypatch):
+    monkeypatch.setattr(harnesses.shutil, "which", lambda name: f"C:\\npm\\{name.upper()}.CMD")
+    assert harnesses.spawn_argv("zcode") == ["C:\\npm\\ZCODE.CMD"]
+
+
+def test_zcode_verify_login_models_and_auth_shapes(monkeypatch):
+    """zcode takes no provider/model/key flags — the proof is a real one-shot prompt."""
+    monkeypatch.setattr(harnesses, "spawn_argv", lambda name: ["zcode"])
+    backend = _backend()
+    assert harnesses.verify_argv("zcode", backend) == [
+        "zcode", "-p", harnesses._VERIFY_PROMPT, "--json", "--mode", "plan"]
+    assert harnesses.login_argv("zcode") == ["zcode", "login"]
+    assert "zcode login" in harnesses.login_hint("zcode")
+    assert harnesses.harness_models("zcode") == []
+    ready, detail = harnesses.check_auth("zcode", backend)
+    assert ready is False
+    assert "provider_not_found" in detail  # backend_setup's skip-login path
+
+
+def test_zcode_spawn_injects_both_provider_configs(monkeypatch, tmp_path):
+    """Outside the Desktop app the headless CLI cannot locate its provider configs
+    (无法定位 CLI ZCode Built-in Provider) — spawn_argv injects the app's own
+    on-disk defaults, never overriding what the environment already says."""
+    import os
+
+    fake_home = tmp_path / "home"
+    cfg = fake_home / ".zcode" / "v2" / "provider_config.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("{}", encoding="utf-8")
+    runtime = fake_home / ".zcode" / "v2" / "runtime" / "provider" / "windows-x86_64"
+    older = runtime / "3.12.2" / "endpoint-abc"
+    newer = runtime / "3.14.0" / "endpoint-abc"
+    for d in (older, newer):
+        d.mkdir(parents=True)
+        (d / "zcode-builtin.json").write_text("{}", encoding="utf-8")
+    os.utime(older / "zcode-builtin.json", (1_000, 1_000))
+    os.utime(newer / "zcode-builtin.json", (2_000, 2_000))
+    monkeypatch.delenv("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", raising=False)
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setattr(harnesses.shutil, "which", lambda name: None)
+    monkeypatch.setattr(harnesses, "_zcode_cjs", lambda: tmp_path / "absent.cjs")
+
+    harnesses.spawn_argv("zcode")
+
+    assert os.environ["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"] == str(cfg)
+    assert os.environ["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] == str(newer / "zcode-builtin.json")
+
+    monkeypatch.setenv("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", r"C:\custom\personal.json")
+    monkeypatch.setenv("ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", r"C:\custom\builtin.json")
+    harnesses.spawn_argv("zcode")
+    assert os.environ["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"] == r"C:\custom\personal.json"
+    assert os.environ["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] == r"C:\custom\builtin.json"

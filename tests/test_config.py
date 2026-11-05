@@ -62,3 +62,43 @@ def test_agent_credential_means_no_key_at_all(monkeypatch):
     assert Backend().resolve_api_key() == "none"                       # local llama.cpp
     assert Backend(api_key_env="SOME_KEY_ENV").resolve_api_key() == "none"  # env var unset
     assert Backend(agent_credential=True, api_key_env="SOME_KEY_ENV").resolve_api_key() == ""
+
+
+def test_env_file_loads_unexported_keys_and_never_overrides(tmp_path, monkeypatch):
+    """.env is the per-project place the key survives the shell that wrote it.
+
+    factory.toml stores only the env var's name; an `export` dies with its
+    shell, so every command that loads the config also loads root/.env —
+    gitignored, existing environment always winning.
+    """
+    from pisoftwarefactory.config import load_env_file
+
+    monkeypatch.setenv("EXISTING", "from-shell")
+    (tmp_path / ".env").write_text(
+        "# comment\n\nNEW_KEY = sk-abc123\nQUOTED='in-quotes'\nEXISTING=from-file\n"
+        "NOT_A_PAIR\n", encoding="utf-8")
+    monkeypatch.delenv("NEW_KEY", raising=False)
+    monkeypatch.delenv("QUOTED", raising=False)
+
+    loaded = load_env_file(tmp_path)
+
+    assert sorted(loaded) == ["NEW_KEY", "QUOTED"]
+    import os
+    assert os.environ["NEW_KEY"] == "sk-abc123"
+    assert os.environ["QUOTED"] == "in-quotes"
+    assert os.environ["EXISTING"] == "from-shell"  # the shell wins
+
+
+def test_export_hint_matches_the_shell(monkeypatch):
+    from pisoftwarefactory.config import export_hint
+
+    monkeypatch.setattr("pisoftwarefactory.config.os.name", "nt")
+    monkeypatch.setenv("PSModulePath", r"C:\PowerShell Modules")
+    hint = export_hint("QODER_API_KEY")
+    assert "$env:QODER_API_KEY" in hint and ".env" in hint
+
+    monkeypatch.delenv("PSModulePath")
+    assert "setx QODER_API_KEY" in export_hint("QODER_API_KEY")
+
+    monkeypatch.setattr("pisoftwarefactory.config.os.name", "posix")
+    assert "export QODER_API_KEY" in export_hint("QODER_API_KEY")

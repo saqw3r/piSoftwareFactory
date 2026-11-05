@@ -1,11 +1,16 @@
-"""Coding-agent harnesses (ADR-0002/ADR-0017): pi and omp behind one registry.
+"""Coding-agent harnesses (ADR-0002/ADR-0017/ADR-0019): pi, omp and zcode.
 
-Both agents resolve a model through a `providers` block in their own agent
+pi and omp both resolve a model through a `providers` block in their own agent
 directory, with the same field names — pi keeps it as JSON
 (``~/.pi/agent/models.json``), omp as YAML (``~/.omp/agent/models.yml``). So
 the factory writes one provider block in whichever format the harness reads,
 and the project's ``[backend]`` in factory.toml stays the single source of
 truth for URL + model + key.
+
+zcode (ADR-0019) is different by design: it serves whatever model its own
+settings or ``zcode login`` define — no provider block, no key on the command
+line, ``[backend]`` recorded but nominal. The factory proves it with one real
+one-shot prompt (``-p``).
 
 omp's agent dir is asked from omp itself (``omp config path``) rather than
 guessed: profiles and XDG layouts move it, and a wrong path means the provider
@@ -25,21 +30,102 @@ import yaml
 
 from .config import Backend
 
-HarnessName = Literal["pi", "omp"]
+HarnessName = Literal["pi", "omp", "zcode"]
 
-HARNESSES: tuple[str, ...] = ("pi", "omp")
+HARNESSES: tuple[str, ...] = ("pi", "omp", "zcode")
 
 # pi's models.json vs omp's models.yml — same schema, different serializer.
+# zcode is deliberately absent: it serves whatever model its own settings (or
+# `zcode login`) define, and sfactory never writes into its configuration.
 _REGISTRY_FILE = {"pi": ("models.json", "json"), "omp": ("models.yml", "yaml")}
 
 _VERIFY_PROMPT = "Reply with exactly: OK"
+
+
+def _zcode_cjs() -> Path:
+    """Where the ZCode Desktop bundle keeps its single-file CLI."""
+    base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    return base / "Programs" / "ZCode" / "resources" / "glm" / "zcode.cjs"
+
+
+def _zcode_builtin_config() -> Path | None:
+    """Newest cached copy of the CDN-served built-in provider config.
+
+    The Desktop app keeps one per app version under
+    ``~/.zcode/v2/runtime/provider/<platform>/<version>/endpoint-<id>/``;
+    old versions linger after updates, so newest mtime wins.
+    """
+    root = Path.home() / ".zcode" / "v2" / "runtime" / "provider"
+    if not root.is_dir():
+        return None
+    candidates = list(root.glob("*/*/endpoint-*/zcode-builtin.json"))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def _ensure_zcode_provider_env() -> None:
+    """zcode's headless CLI resolves its models through two config files that the
+    Desktop app injects as env vars — and a plain terminal (the factory's case)
+    has neither, so the CLI dies with "无法定位 CLI ZCode Built-in Provider":
+
+    - ``ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`` — the user's own providers
+      (observed: ``~/.zcode/v2/provider_config.json``);
+    - ``ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`` — the CDN-served provider catalog
+      cached per app version under ``~/.zcode/v2/runtime/provider/…``.
+
+    Both default to the app's on-disk locations, never overriding the
+    environment.
+    """
+    if not os.environ.get("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"):
+        personal = Path.home() / ".zcode" / "v2" / "provider_config.json"
+        if personal.is_file():
+            os.environ["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"] = str(personal)
+    if not os.environ.get("ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"):
+        builtin = _zcode_builtin_config()
+        if builtin:
+            os.environ["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] = str(builtin)
+
+
+def spawn_argv(name: str) -> list[str]:
+    """The argv prefix that actually launches the harness.
+
+    pi/omp are PATH shims (npm .cmd files); zcode may only exist as the Desktop
+    bundle's ``zcode.cjs``, which needs a node prefix. Everything that builds
+    an argv (verify, login, models, auth, worker/reviewer commands) starts from
+    here, so a future official shim on PATH is picked up without changes.
+    """
+    if name == "zcode":
+        _ensure_zcode_provider_env()
+        shim = shutil.which("zcode")
+        if shim:
+            return [shim]
+        script = _zcode_cjs()
+        if script.is_file():
+            return [shutil.which("node") or "node", str(script)]
+        return ["zcode"]
+    return [binary(name)]
 
 
 class HarnessError(RuntimeError):
     """The harness can't serve this backend — message carries the remedy."""
 
 
+def no_window() -> int:
+    """subprocess creation flags that stop console-window flashing on Windows.
+
+    The factory's children (node CLIs, their own helpers) spawn console
+    processes of their own; a child with no console to inherit gets a visible
+    window that flashes and dies — one per spawn. ``CREATE_NO_WINDOW`` gives
+    the whole tree one invisible console. Interactive spawns (the `login`
+    handover) must not use it: they need the real terminal.
+    """
+    return subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
 def installed(name: str) -> bool:
+    if name == "zcode":
+        return shutil.which(name) is not None or _zcode_cjs().is_file()
     return shutil.which(name) is not None
 
 
@@ -54,22 +140,41 @@ def binary(name: str) -> str:
     return shutil.which(name) or name
 
 
+def has_registry(name: str) -> bool:
+    """Whether sfactory may merge a provider block for this harness at all.
+
+    zcode serves whatever model its own settings (or ``zcode login``) define —
+    there is no provider registry to merge into, so backend setup and `--show`
+    skip it instead of pretending.
+    """
+    return name in _REGISTRY_FILE
+
+
 def agent_dir(name: str) -> Path:
     """Where the harness keeps auth + model registry (env override first)."""
-    override = os.environ.get("PI_CODING_AGENT_DIR" if name == "pi" else "OMP_CODING_AGENT_DIR")
-    if override:
-        return Path(override)
+    override = {"pi": "PI_CODING_AGENT_DIR", "omp": "OMP_CODING_AGENT_DIR",
+                "zcode": "ZCODE_CODING_AGENT_DIR"}.get(name)
+    if override and os.environ.get(override):
+        return Path(os.environ[override])
     if name == "omp":
         out = subprocess.run(
-            ("omp", "config", "path"), capture_output=True, text=True, check=False
+            ("omp", "config", "path"), capture_output=True, text=True, check=False,
+            creationflags=no_window(),
         ).stdout.strip()
         if out and Path(out).is_dir():
             return Path(out)
         return Path.home() / ".omp" / "agent"
+    if name == "zcode":
+        return Path.home() / ".zcode"  # diagnostics only — sfactory never writes here
     return Path.home() / ".pi" / "agent"
 
 
 def registry_path(name: str) -> Path:
+    if name not in _REGISTRY_FILE:
+        raise HarnessError(
+            f"{name} keeps no provider registry — its model comes from its own "
+            "settings/login, so there is nothing to register or check"
+        )
     filename, _fmt = _REGISTRY_FILE[name]
     return agent_dir(name) / filename
 
@@ -106,6 +211,21 @@ def selectable_model_id(name: str, backend: Backend) -> str:
     if _harness_key_style(name) == "provider/id" and "/" not in backend.model:
         return f"{backend.provider}/{backend.model}"
     return backend.model
+
+
+def mask_argv(argv: list[str]) -> list[str]:
+    """argv safe to print or log: the value after ``--api-key`` is redacted.
+
+    The key rides inside the worker/reviewer command line (pi takes it at
+    runtime for custom endpoints). Nothing logs full argv today; this exists so
+    the first "helpful debugging output" does not start leaking it into
+    ``.factory/run`` logs.
+    """
+    out = list(argv)
+    for i, part in enumerate(out):
+        if part == "--api-key" and i + 1 < len(out):
+            out[i + 1] = "***"
+    return out
 
 
 def registry_load(name: str) -> dict | None:
@@ -200,8 +320,10 @@ def endpoint_models(backend: Backend) -> list[str]:
 
 def harness_models(name: str) -> list[str]:
     """The harness's own catalog (subscription providers included)."""
+    if name == "zcode":
+        return []  # no catalog command; zcode serves what its settings define
     argv = (binary(name), "models", "ls", "--json") if name == "omp" else (binary(name), "--list-models")
-    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+    proc = subprocess.run(argv, capture_output=True, text=True, check=False, creationflags=no_window())
     if proc.returncode != 0:
         return []
     out = proc.stdout.strip()
@@ -223,6 +345,9 @@ def verify_argv(name: str, backend: Backend, runtime_key: bool = True) -> list[s
     drops it for subscription providers, where the stored credential is the one
     that must be proven.
     """
+    if name == "zcode":
+        # plan mode is read-only by construction; --json so the answer is machine-ish.
+        return [*spawn_argv(name), "-p", _VERIFY_PROMPT, "--json", "--mode", "plan"]
     if name == "omp":
         return [binary(name), "--model", selectable_model_id(name, backend), "--print", _VERIFY_PROMPT]
     argv = [binary(name), "--provider", backend.provider, "--model", backend.model]
@@ -234,10 +359,14 @@ def verify_argv(name: str, backend: Backend, runtime_key: bool = True) -> list[s
 
 def login_argv(name: str) -> list[str]:
     """The interactive command that hands the terminal to the harness login."""
+    if name == "zcode":
+        return [*spawn_argv(name), "login"]
     return [binary(name), "login"] if name == "omp" else [binary(name)]
 
 
 def login_hint(name: str) -> str:
+    if name == "zcode":
+        return "`zcode login` — pick z.ai (Start plan) or BigModel; the CLI then serves its own model"
     if name == "omp":
         return "`omp login` — pick the provider (or run `sfactory backend --login` to hand you over)"
     return "run `pi`, type `/login`, pick the provider, and use key `none` for a local llama.cpp endpoint"
@@ -255,6 +384,10 @@ def remedy(output: str, backend: Backend, harness: str = "pi") -> str:
         return (f"the agent has no credential for provider {backend.provider!r}: {login_hint(harness)}"
                 " — or pass the key at runtime, which `sfactory backend` and dispatch both do now")
     if "connect" in lowered or "econnrefused" in lowered:
+        if harness == "zcode":
+            return (f"{harness} cannot reach the model its own settings point at — set the "
+                    "model/provider in the ZCode app settings, or `zcode login` to serve a "
+                    "subscription model")
         return (f"nothing is serving {backend.base_url} — start the endpoint (llama-router / llama-server) "
                 "or point the project elsewhere with `sfactory backend --source openai-endpoint`")
     if "model" in lowered and ("not found" in lowered or "not offered" in lowered):
@@ -273,10 +406,15 @@ def check_auth(name: str, backend: Backend) -> tuple[bool, str]:
     pi has `pi auth check`; omp has no equivalent dry-run, so for omp the answer
     comes from the one-shot verify run instead.
     """
+    if name == "zcode":
+        # "provider_not_found" reuses backend_setup's unmanaged path: no login
+        # handover is forced — the real prompt is the only honest proof here.
+        return (False, f"provider_not_found: {name} serves its own configured model — "
+                       "proving with a real prompt instead")
     if name == "pi":
         proc = subprocess.run(
             (binary("pi"), "auth", "check", "--provider", backend.provider, "--json"),
-            capture_output=True, text=True, check=False,
+            capture_output=True, text=True, check=False, creationflags=no_window(),
         )
         try:
             payload = json.loads(proc.stdout)

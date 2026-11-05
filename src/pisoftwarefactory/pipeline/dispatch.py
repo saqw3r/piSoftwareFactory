@@ -16,7 +16,7 @@ from ..gitcmd import GitRefused
 from ..gitcmd import run as _git
 from ..harnesses import remedy
 from ..integrations import hindsight
-from ..integrations.pi_agent import PiRun, run_worker
+from ..integrations.pi_agent import PiRun, brain_label, run_worker
 from .brief import render_brief, write_brief
 from .graph import Graph, Node
 
@@ -194,9 +194,8 @@ def dispatch_node(root: Path, node: Node, config: FactoryConfig | None = None, l
         brief_path = write_brief(wt / ".factory" / "briefs", node, brief)
         # Naming base_url for a provider the agent authenticates itself would
         # point the operator at an endpoint the worker never calls.
-        serves = config.backend.provider if config.backend.agent_credential else config.backend.base_url
         log(f"  [bold]{node.id}[/] attempt {attempt + 1}: {config.harness.name} worker "
-              f"({config.backend.model} @ {serves}) on lane {lane} "
+              f"({brain_label(config)}) on lane {lane} "
               f"(brief={brief_path.name})")
         run = run_worker(brief_path, config, cwd=wt, log=log)
         worker_runs.append(run)
