@@ -169,6 +169,11 @@ def pick_model(candidates: list[str], current: str, ask: Callable[..., str], log
     default_index = shown.index(current) + 1 if current in shown else 1
     for i, model in enumerate(shown, 1):
         log(f"  {i}. {model}")
+    if len(candidates) > len(shown):
+        # The list is a menu, not an inventory: a hidden id is still typeable,
+        # but only the operator who knows it exists. Say what is not shown.
+        log(f"  … {len(candidates) - len(shown)} more — type the id, or pass "
+            "`sfactory model <id>` to search the whole list")
     answer = ask("model", default=str(default_index)).strip()
     if answer.isdigit() and 1 <= int(answer) <= len(shown):
         return shown[int(answer) - 1]

@@ -441,6 +441,21 @@ def test_a_down_server_is_named_instead_of_a_model_being_blamed(tmp_path, fake_h
     assert "start the server" in text and "unproven" in text
 
 
+def test_a_long_model_list_says_what_it_is_not_showing(tmp_path, fake_harness, monkeypatch):
+    """25 GGUFs loaded, 15 lines printed — the other ten must be named as absent."""
+    _project(tmp_path)
+    monkeypatch.setattr(harnesses, "endpoint_models",
+                        lambda b: [f"model-{i}.gguf" for i in range(25)])
+    msgs: list[str] = []
+    backend_setup.run_backend(
+        tmp_path, harness="pi", source="harness-login", provider="llamacpp",
+        ask=_ask(["2"]), log=msgs.append)
+    text = " ".join(msgs)
+    assert "10 more — type the id" in text
+    assert sum(1 for m in msgs if m.strip().startswith("16. ")) == 0  # the cut is real
+    assert load_config(tmp_path).backend.model == "model-1.gguf"
+
+
 def test_the_check_line_names_the_command_but_never_the_key(tmp_path, fake_harness, monkeypatch):
     _project(tmp_path)
     monkeypatch.setenv("QODER_API_KEY", "sk-live-secret")
