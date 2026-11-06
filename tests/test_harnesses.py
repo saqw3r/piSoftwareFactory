@@ -7,6 +7,7 @@ nothing here can touch the developer's real ~/.pi or ~/.omp.
 from __future__ import annotations
 
 import json
+import types
 
 import pytest
 import yaml
@@ -231,3 +232,59 @@ def test_repair_empty_keys_fixes_whole_file_rejections(monkeypatch, tmp_path):
         {"providers": {"a": {"apiKey": ""}}}), encoding="utf-8")
     assert harnesses.repair_empty_keys("omp") == 1
     assert yaml.safe_load((omp_dir / "models.yml").read_text(encoding="utf-8"))["providers"]["a"]["apiKey"] == "none"
+
+
+# Captured from `pi --list-models` on a machine with a llama.cpp server attached:
+# a fixed-width table, no JSON mode, and one warning line above the header.
+_PI_TABLE = '''Warning: No models match pattern "openrouter/nvidia/nemotron-3.5-content-safety:free"
+provider      model                                                     context  max-out  thinking  images
+cline         cohere/north-mini-code:free                               256K     64K      yes       no
+llama.cpp     bonsai-27b                                                40K      8K       no        no
+llama.cpp     qwen3.5-9b                                                128K     32K      yes       no
+openrouter    nvidia/nemotron-3-ultra-550b-a55b:free                     1M       65.5K    yes       no
+'''
+
+
+def _fake_pi_output(monkeypatch, out: str, returncode: int = 0) -> None:
+    proc = types.SimpleNamespace(returncode=returncode, stdout=out, stderr="")
+    monkeypatch.setattr(harnesses, "binary", lambda name: name)
+    monkeypatch.setattr(harnesses.subprocess, "run", lambda *a, **kw: proc)
+
+
+def test_the_pi_table_keeps_each_model_next_to_its_provider(monkeypatch):
+    """~950 ids over 14 providers answer nothing as one flat list — the provider
+    column is what makes 'which model can this backend serve' a question."""
+    _fake_pi_output(monkeypatch, _PI_TABLE)
+    assert harnesses.harness_catalog("pi") == [
+        ("cline", "cohere/north-mini-code:free"),
+        ("llama.cpp", "bonsai-27b"),
+        ("llama.cpp", "qwen3.5-9b"),
+        ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"),
+    ]
+    assert harnesses.harness_models("pi") == [
+        "cohere/north-mini-code:free", "bonsai-27b", "qwen3.5-9b",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+    ]
+
+
+def test_providers_are_offered_by_their_model_count(monkeypatch):
+    """The operator asks 'what can I run?' — the busiest provider is the answer,
+    and a provider that names no model is not a provider."""
+    _fake_pi_output(monkeypatch, _PI_TABLE)
+    assert harnesses.harness_providers("pi") == [("llama.cpp", 2), ("cline", 1), ("openrouter", 1)]
+
+
+def test_a_catalog_that_fails_to_run_offers_nothing(monkeypatch):
+    """A non-zero exit must not become an empty table parsed into fake rows."""
+    _fake_pi_output(monkeypatch, "provider      model\nx           y\n", returncode=1)
+    assert harnesses.harness_catalog("pi") == []
+    assert harnesses.harness_providers("pi") == []
+
+
+def test_the_omp_json_catalog_carries_the_same_pairs(monkeypatch):
+    """omp has a machine mode, so both harnesses hand back (provider, model)."""
+    payload = json.dumps({"models": [{"provider": "llamacpp", "selector": "llamacpp/qwen3.5-9b"},
+                                     {"provider": "openrouter", "id": "x/y"}]})
+    _fake_pi_output(monkeypatch, payload)
+    assert harnesses.harness_catalog("omp") == [("llamacpp", "llamacpp/qwen3.5-9b"),
+                                                ("openrouter", "x/y")]

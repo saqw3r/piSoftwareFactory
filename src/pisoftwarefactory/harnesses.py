@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -358,8 +359,33 @@ def endpoint_models(backend: Backend) -> list[str]:
     return sorted({str(item.get("id")) for item in data if isinstance(item, dict) and item.get("id")})
 
 
-def harness_models(name: str) -> list[str]:
-    """The harness's own catalog (subscription providers included)."""
+def _catalog_pi(out: str) -> list[tuple[str, str]]:
+    """pi prints a fixed-width table and offers no JSON mode — parse what it says.
+
+    Columns are separated by two or more spaces and neither cell contains one,
+    so the first two cells of every row are provider and model. Rows are taken in
+    pi's own order and deduplicated: an operator reads this list, so it should
+    match what `pi --list-models` showed them.
+    """
+    rows: list[tuple[str, str]] = []
+    for line in out.splitlines():
+        cells = re.split(r"\s{2,}", line.strip())
+        if len(cells) < 2 or cells[0] == "provider":
+            continue
+        entry = (cells[0], cells[1])
+        if entry not in rows:
+            rows.append(entry)
+    return rows
+
+
+def harness_catalog(name: str) -> list[tuple[str, str]]:
+    """``(provider, model)`` pairs the agent itself lists, in the order it prints.
+
+    The provider has to travel with the model: `pi --list-models` answers with
+    ~950 rows across 14 providers, and offering all of them as one flat list
+    means the operator picks an id whose provider they then have to configure
+    separately — which is how a freeflow id ends up pointed at a dead endpoint.
+    """
     if name == "zcode":
         return []  # no catalog command; zcode serves what its settings define
     argv = (binary(name), "models", "ls", "--json") if name == "omp" else (binary(name), "--list-models")
@@ -367,13 +393,32 @@ def harness_models(name: str) -> list[str]:
     if proc.returncode != 0:
         return []
     out = proc.stdout.strip()
-    if name == "omp":
-        try:
-            payload = json.loads(out)
-        except ValueError:
-            return []
-        return sorted({str(m.get("selector") or m.get("id")) for m in payload.get("models", []) if isinstance(m, dict)})
-    return sorted({line.strip() for line in out.splitlines() if line.strip() and " " not in line.strip()})
+    if name != "omp":
+        return _catalog_pi(out)
+    try:
+        payload = json.loads(out)
+    except ValueError:
+        return []
+    models = [m for m in payload.get("models", []) if isinstance(m, dict)]
+    return sorted({(str(m.get("provider") or ""), str(m.get("selector") or m.get("id"))) for m in models})
+
+
+def harness_models(name: str) -> list[str]:
+    """Every model id the harness knows, regardless of provider."""
+    return [model for _provider, model in harness_catalog(name)]
+
+
+def harness_providers(name: str) -> list[tuple[str, int]]:
+    """Providers with their model counts, busiest first — the answer to "what can I run?".
+
+    An empty list means the harness does not name providers at all; callers then
+    skip the provider question rather than inventing a group for the models.
+    """
+    counts: dict[str, int] = {}
+    for provider, _model in harness_catalog(name):
+        if provider:
+            counts[provider] = counts.get(provider, 0) + 1
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))
 
 
 def verify_argv(name: str, backend: Backend, runtime_key: bool = True) -> list[str]:
