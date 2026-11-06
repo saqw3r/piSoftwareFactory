@@ -171,16 +171,19 @@ it only re-registers the pi provider and re-probes the backend.
 
 ### Worker brain: pi, omp or zcode, and where its model comes from (ADR-0017, ADR-0019)
 
-`sfactory backend` asks two questions and then **runs one real prompt through
-the agent it just configured** — so "saved" means "answered", not "the file
-says so". Pass everything as flags and it asks nothing (`-y` takes defaults).
+Two commands, two different words (ADR-0022): `sfactory brain` picks **which
+agent does the work** (pi | omp | zcode); `sfactory provider` picks **where the
+model comes from** and then **runs one real prompt through that agent** — so
+"saved" means "answered", not "the file says so". Pass everything as flags and
+it asks nothing (`-y` takes defaults).
 
 ```powershell
-sfactory backend                       # interactive: harness + source + model
-sfactory backend --harness omp -y      # omp on the local llama.cpp, no questions
-sfactory backend --harness pi --source openai-endpoint `
+sfactory brain omp                      # switch the worker brain, keep the provider
+sfactory provider                       # interactive: source (+ provider) + model
+sfactory provider --harness omp -y      # omp on the local llama.cpp, no questions
+sfactory provider --harness pi --source openai-endpoint `
          --base-url https://api.openai.com/v1 --api-key-env OPENAI_API_KEY
-sfactory backend --source harness-login --login   # subscription: hands you the agent's own login
+sfactory provider --source harness-login --login   # subscription: hands you the agent's own login
 ```
 
 Sources: `llama-local` (your endpoint, mocked key — the default),
@@ -203,10 +206,10 @@ Presets are shorthand for well-known `openai-endpoint` targets — the URL and k
 env var are pre-answered, explicit flags still win:
 
 ```powershell
-sfactory backend --source llamacpp -y   # local llama.cpp / llama-router (:8080, mocked key)
-sfactory backend --source ollama -y     # local Ollama (:11434, mocked key)
-sfactory backend --source qoder -y      # local Qoder gateway on 127.0.0.1:8790/v1, key in QODER_API_KEY
-sfactory backend --source dashscope -y  # Alibaba DashScope (Qwen behind a key), key in DASHSCOPE_API_KEY
+sfactory provider --source llamacpp -y   # local llama.cpp / llama-router (:8080, mocked key)
+sfactory provider --source ollama -y     # local Ollama (:11434, mocked key)
+sfactory provider --source qoder -y      # local Qoder gateway on 127.0.0.1:8790/v1, key in QODER_API_KEY
+sfactory provider --source dashscope -y  # Alibaba DashScope (Qwen behind a key), key in DASHSCOPE_API_KEY
 ```
 
 Run bare (interactive), it first probes known local ports — the qoder gateway,
@@ -216,18 +219,18 @@ env var too, so a running gateway is configured in two keystrokes.
 
 A provider the agent logs into itself is not an endpoint, so it gets no key at
 all — the mocked `--api-key none` that a local llama.cpp needs is exactly what
-makes a keyless provider answer 401. `sfactory backend --source harness-login`
+makes a keyless provider answer 401. `sfactory provider --source harness-login`
 records that (`agent_credential = true`), skips the `/v1/models` probe, and
 verifies with one real prompt instead:
 
 ```powershell
 pi install npm:pi-freeflow                    # the extension serves the provider itself
-sfactory backend --harness pi --source harness-login `
+sfactory provider --harness pi --source harness-login `
          --provider freeflow --model ovh-free/gpt-oss-120b --verify-timeout-min 3
 sfactory run "…"                              # every turn now goes through pi's own auth
 ```
 
-`sfactory backend` reads `provider_not_found` from pi's own auth check as "pi
+`sfactory provider` reads `provider_not_found` from pi's own auth check as "pi
 keeps no credential for this provider" and proves the setup with the prompt
 instead of opening a login it cannot satisfy.
 
@@ -252,8 +255,8 @@ takes no `--model`/`--provider`/`--api-key` flags, and sfactory writes nothing
 into its configuration. `[backend]` is recorded but nominal.
 
 ```powershell
-sfactory backend --harness zcode -y     # proves it with one real one-shot prompt
-sfactory provider omp                   # quick switch: pi | omp | zcode — proved before saved
+sfactory brain zcode                      # switch the brain to zcode
+sfactory brain omp                        # quick switch: pi | omp | zcode — proved before saved
 sfactory model deepseek-r1              # pick the model from the live catalog
 sfactory run "Add rate limiting to the login endpoint"   # workers: -p --json --mode yolo
 ```
@@ -280,7 +283,7 @@ when the lane actually diverged from its base ref: a commit ahead, or an edit
 outside `.factory/` (the worker's own brief lives in the lane and is not work).
 Three failures therefore stop the run with their own cause on the terminal:
 the agent died before answering (its error plus the fix), the model replied
-with an empty message (its name plus `sfactory backend --model <id>`), or git
+with an empty message (its name plus `sfactory model <id>`), or git
 would not inspect the lane (`sfactory` trusts only the directory each call
 owns, so network-drive repos work; a residual refusal prints git's words and
 the `safe.directory` command that clears them).
@@ -477,8 +480,8 @@ to overwrite).
 | Command | Purpose |
 |---|---|
 | `sfactory init [--auto] [--langs …]` | scaffold the factory into a project |
-| `sfactory backend [--harness pi\|omp\|zcode] [--source …] [-y]` | choose the worker brain and prove it answers |
-| `sfactory provider [pi\|omp\|zcode]` | switch the brain, keep the backend — proved before saved |
+| `sfactory provider [--harness pi\|omp\|zcode] [--source …] [-y]` | choose which provider serves the model and prove it answers |
+| `sfactory brain [pi\|omp\|zcode]` | switch the brain, keep the provider — proved before saved |
 | `sfactory model [id]` | choose the model from the live catalog (zcode: refused — its own app decides) |
 | `sfactory doctor` | verify backend model/ctx + api key, node+harness, hindsight, paperclip, toolchains |
 | `sfactory run "task"` | one task through the whole pipeline |
