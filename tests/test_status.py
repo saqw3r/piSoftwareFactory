@@ -37,7 +37,9 @@ def test_status_names_the_brain_and_the_key_env_state(tmp_path, monkeypatch):
 
     monkeypatch.delenv("QODER_API_KEY", raising=False)
     out = _status(tmp_path)
-    assert ("brain: omp · qoder · http://127.0.0.1:8790/v1 · qwen3-coder-plus · "
+    # Both words now name one thing each (ADR-0022): brain is the agent, provider
+    # is the model source. An unlabelled middle word reads as either.
+    assert ("brain: omp · provider: qoder · http://127.0.0.1:8790/v1 · qwen3-coder-plus · "
             "key: $QODER_API_KEY (not set)") in out
 
     monkeypatch.setenv("QODER_API_KEY", "sk-secret-value")

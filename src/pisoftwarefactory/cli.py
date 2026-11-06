@@ -231,7 +231,10 @@ def update() -> None:
 
 
 @app.command()
-def backend(
+def provider(
+    word: str = typer.Argument(
+        "", help="Takes no argument: `sfactory brain` switches pi|omp|zcode, "
+                 "a preset goes in --source."),
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
     harness: str = typer.Option("", "--harness", help="Coding agent: pi | omp | zcode."),
     source: str = typer.Option("", "--source", help="llama-local | openai-endpoint | harness-login | preset (qoder, dashscope)."),
@@ -252,7 +255,30 @@ def backend(
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="No questions — take the defaults and the values passed."),
 ) -> None:
-    """Choose the worker brain — pi/omp/zcode × local llama.cpp / OpenAI endpoint / subscription login."""
+    """Choose which provider serves the model, then prove it answers (ADR-0017/0022).
+
+    This command answers *where the model comes from* — local llama.cpp, an
+    OpenAI-compatible endpoint, or a provider the agent logs into itself. Which
+    agent runs the work is `sfactory brain`.
+    """
+    if word:
+        # Since the rename (ADR-0022) this word used to be a command. A bare
+        # "Got unexpected extra argument" would leave the operator guessing
+        # where it went, so name the command that does what he typed.
+        from . import harnesses
+        from .backend_setup import PRESETS
+
+        if word in harnesses.HARNESSES:
+            why = f"{word!r} is a worker brain, not a model provider"
+            nxt = f"`sfactory brain {word}`"
+        elif word in PRESETS:
+            why = f"{word!r} is a preset endpoint — it belongs in --source"
+            nxt = f"`sfactory provider --source {word} -y`"
+        else:
+            why = f"unknown provider {word!r}"
+            nxt = "`sfactory provider` (asks, and lists what answers)"
+        err.print(f"[red]{why}[/] — next command: {nxt}")
+        raise typer.Exit(code=2)
     _start_file_log(root)
     from .backend_setup import run_backend
 
@@ -265,7 +291,7 @@ def backend(
 
 
 @app.command()
-def provider(
+def brain(
     harness: str = typer.Argument("", help="pi | omp | zcode (omit for the menu)."),
     root: Path = typer.Option(Path("."), "--root", help="Project root."),
     yes: bool = typer.Option(False, "--yes", "-y", help="No questions."),
@@ -497,7 +523,7 @@ def review(
         err.print(f"  [red]unreviewed[/] — the reviewer answered without a verdict, so this "
                   "diff has no reviewer opinion on it. The text above is what it actually "
                   f"said; re-run `sfactory review {target.id}`, or fix the backend with "
-                  "`sfactory backend` if it answered nothing.")
+                  "`sfactory provider` if it answered nothing.")
         raise typer.Exit(code=1)
 
 
@@ -606,7 +632,7 @@ def status(
             key = f"${b.api_key_env} ({'set' if os.environ.get(b.api_key_env) else 'not set'})"
         else:
             key = "mocked (none)"
-        console.print(f"brain: {cfg.harness.name} · {b.provider} · {b.base_url} · {b.model} · key: {key}")
+        console.print(f"brain: {cfg.harness.name} · provider: {b.provider} · {b.base_url} · {b.model} · key: {key}")
     except FileNotFoundError:
         console.print("[dim]brain: no factory.toml — run `sfactory init`[/]")
 

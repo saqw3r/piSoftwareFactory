@@ -1,4 +1,4 @@
-"""`sfactory backend` wizard tests — no real pi/omp, no network.
+"""`sfactory provider` wizard tests — no real pi/omp, no network.
 
 The two seams the outside world hides behind (`harnesses.installed` /
 `_run_stream`) are stubbed, so what is under test is the decision sequence:
@@ -105,7 +105,7 @@ def test_missing_credential_reports_the_login_command_and_changes_nothing(tmp_pa
         log=msgs.append, ask=_ask([]),
     )
     assert code == 4
-    assert any("/login" in m and "sfactory backend" in m for m in msgs)
+    assert any("/login" in m and "sfactory provider" in m for m in msgs)
     assert (tmp_path / "factory.toml").read_text(encoding="utf-8") == before
     assert load_config(tmp_path).backend.model == config.backend.model
 
@@ -270,7 +270,7 @@ def test_success_prints_the_replay_one_liner(tmp_path, fake_harness):
 
 
 def test_a_live_endpoint_is_offered_and_its_preset_adopted(tmp_path, fake_harness, monkeypatch):
-    """Bare `sfactory backend` probes loopback first: pick 1 and the URL — plus the
+    """Bare `sfactory provider` probes loopback first: pick 1 and the URL — plus the
     matching preset's key env — are answered for you."""
     _project(tmp_path)
     qoder_url = backend_setup.PRESETS["qoder"]["base_url"]
@@ -646,3 +646,41 @@ def test_model_off_catalog_warns_but_tries(tmp_path, fake_harness, monkeypatch):
     assert code == 0
     assert any("not in the endpoint's catalog" in m for m in msgs)
     assert load_config(tmp_path).backend.model == "mystery-model"
+
+
+def test_the_two_command_names_are_distinct_on_the_surface():
+    """ADR-0022: `provider` is the model source, `brain` is the agent.
+
+    The old names were `backend` and `provider`, and one word meaning two
+    things is what made an operator look for llama.cpp in the brain menu.
+    """
+    from typer.testing import CliRunner
+
+    from pisoftwarefactory.cli import app
+
+    help_text = CliRunner().invoke(app, ["--help"]).output
+    assert "provider" in help_text and "brain" in help_text
+    assert " backend" not in help_text  # the old name is gone, not aliased to a third meaning
+
+
+def test_a_brain_name_at_the_provider_door_is_answered_with_the_brain_command():
+    """`sfactory provider omp` used to switch the brain — say where it went."""
+    from typer.testing import CliRunner
+
+    from pisoftwarefactory.cli import app
+
+    result = CliRunner().invoke(app, ["provider", "omp"])
+    assert result.exit_code == 2
+    # fragments, not the whole sentence: the console wraps at 80 columns
+    assert "worker brain" in result.output and "sfactory brain" in result.output
+
+
+def test_a_preset_word_at_the_provider_door_points_at_source():
+    """`sfactory provider llamacpp` is the right machine, the wrong flag."""
+    from typer.testing import CliRunner
+
+    from pisoftwarefactory.cli import app
+
+    result = CliRunner().invoke(app, ["provider", "llamacpp"])
+    assert result.exit_code == 2
+    assert "sfactory provider --source llamacpp" in result.output
