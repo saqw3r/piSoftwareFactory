@@ -60,3 +60,35 @@ def test_an_empty_assistant_message_is_reported_as_no_text():
     }))
     assert run.final_text == ""
     assert (run.input_tokens, run.output_tokens) == (0, 0)
+
+
+def test_zcode_json_schema_captured_live():
+    """zcode's --json output, verbatim shape from a real verify run (2026-11-05):
+    response + usage with real token counts — no more zero accounting."""
+    from pisoftwarefactory.integrations.pi_agent import PiRun, _zcode_parse
+
+    raw = json.dumps({
+        "sessionId": "sess_9894510e",
+        "turnId": "turn_0698cd30",
+        "response": "OK",
+        "usage": {"source": "provider", "modelRequestCount": 1, "inputTokens": 18249,
+                  "outputTokens": 2, "totalTokens": 18251, "cacheReadTokens": 18248,
+                  "cacheWriteTokens": 0, "reasoningTokens": 0},
+        "eventCount": 11,
+        "projection": {"status": "idle", "turnCount": 1, "totalTokenCount": 18251,
+                       "contextUsed": 18251, "contextWindow": 200000},
+    })
+    run = PiRun(returncode=0)
+    _zcode_parse(raw, run)
+    assert run.final_text == "OK"
+    assert (run.input_tokens, run.output_tokens) == (18249, 2)
+
+
+def test_zcode_plain_text_and_garbage_fall_back():
+    from pisoftwarefactory.integrations.pi_agent import PiRun, _zcode_parse
+
+    run = PiRun(returncode=0)
+    _zcode_parse("plain answer, no json", run)
+    assert run.final_text == "plain answer, no json"
+    _zcode_parse("{not json", run)
+    assert run.final_text == "{not json"

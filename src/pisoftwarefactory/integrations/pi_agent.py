@@ -175,26 +175,34 @@ def _zcode_command(config: FactoryConfig, mode: str) -> list[str]:
     return cmd
 
 
-def _zcode_final_text(stdout: str) -> str:
-    """Best-effort final text from zcode's ``--json`` output (schema not yet pinned).
+def _zcode_parse(stdout: str, run: PiRun) -> None:
+    """Fill a PiRun from zcode's ``--json`` output — schema captured live.
 
-    Accepts a single JSON object with a text-shaped result field, falls back to
-    the raw stream otherwise. Capturing a real run will tighten this (ADR-0019
-    follow-up: token and tool accounting stay zero until then).
+    One JSON object per run: ``response`` (the answer), ``usage`` with real
+    token counts (inputTokens/outputTokens/totalTokens/cacheReadTokens), and a
+    ``projection`` block. Non-JSON output (plain-text runs) falls back to the
+    raw tail; malformed JSON keeps whatever the event parser already found.
     """
     try:
         payload = json.loads(stdout)
     except ValueError:
-        return stdout[-4000:]
-    if isinstance(payload, dict):
-        for key in ("result", "text", "output"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value
-        message = payload.get("message")
-        if isinstance(message, dict) and isinstance(message.get("content"), str):
-            return message["content"]
-    return stdout[-4000:]
+        run.final_text = stdout[-4000:]
+        return
+    if not isinstance(payload, dict):
+        run.final_text = stdout[-4000:]
+        return
+    response = payload.get("response")
+    if isinstance(response, str) and response.strip():
+        run.final_text = response
+    else:
+        run.final_text = stdout[-4000:]
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        for field, key in (("input_tokens", "inputTokens"), ("output_tokens", "outputTokens")):
+            try:
+                setattr(run, field, int(usage.get(key) or 0))
+            except (TypeError, ValueError):
+                pass
 
 
 def _base_command(config: FactoryConfig, mode: str) -> list[str]:
@@ -433,7 +441,7 @@ def run_worker(brief_path: Path, config: FactoryConfig, cwd: Path, log=None) -> 
     if not run.final_text and stdout and not stdout.lstrip().startswith("{"):
         run.final_text = stdout  # print-mode fallback
     if config.harness.name == "zcode" and not run.final_text and stdout.strip():
-        run.final_text = _zcode_final_text(stdout)  # --json shape not pinned yet
+        _zcode_parse(stdout, run)  # --json schema captured live 2026-11-05
     if rc != 0 and stderr:
         run.final_text = (run.final_text + "\n" + stderr).strip()
     run.duration_s = __import__("time").monotonic() - started
