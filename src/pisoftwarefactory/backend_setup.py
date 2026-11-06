@@ -68,11 +68,14 @@ PRESETS: dict[str, dict[str, str]] = {
     },
 }
 
+# pi's catalog name for the local server, spelled the way pi writes it.
+PROVIDER_ALIASES = {"llama.cpp": "llamacpp", "llama": "llamacpp"}
+
 # Known homes of local OpenAI-compatible servers, probed before the source
 # question so "what can I use?" is answered by pressing a number instead of
-# knowing a URL. llama.cpp's :8080 stays out for now (the owner's server is
-# off); re-add it when it is back.
-LOCAL_PORTS = (8790, 1234, 11434, 8000)  # qoder gateway, LM Studio, Ollama, vLLM
+# knowing a URL. :8080 is llama.cpp/llama-router — the model list a running
+# server serves right now is the only list worth offering.
+LOCAL_PORTS = (8080, 8790, 1234, 11434, 8000)  # llama.cpp, qoder gateway, LM Studio, Ollama, vLLM
 
 _VERIFY_TIMEOUT_SEC = 180
 
@@ -170,6 +173,80 @@ def pick_model(candidates: list[str], current: str, ask: Callable[..., str], log
     if answer.isdigit() and 1 <= int(answer) <= len(shown):
         return shown[int(answer) - 1]
     return answer
+
+
+def _preset_for(provider: str) -> dict[str, str]:
+    """The preset that owns this provider name, or {} when nothing does."""
+    return next((p for p in PRESETS.values() if p["provider"] == provider), {})
+
+
+def provider_choices(harness: str) -> list[tuple[str, int]]:
+    """Providers to offer: the harness's own, plus every preset, aliased onto one name.
+
+    pi's table calls the local server ``llama.cpp`` and the factory's working
+    block ``llamacpp``; they are the same machine, so they must appear once —
+    under the spelling that answers. pi's built-in ``llama.cpp`` provider takes
+    no ``--api-key`` and waits silently when nothing listens, where the factory's
+    fails fast.
+    """
+    merged: dict[str, int] = {}
+    for provider, count in harnesses.harness_providers(harness):
+        key = PROVIDER_ALIASES.get(provider, provider)
+        merged[key] = merged.get(key, 0) + count
+    for preset in PRESETS.values():
+        merged.setdefault(preset["provider"], 0)
+    return sorted(merged.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+
+
+def pick_provider(choices: list[tuple[str, int]], current: str, ask: Callable[..., str], log) -> str:
+    """Provider first, then its models — one 950-row list answers neither question."""
+    default_index = next((i for i, (p, _n) in enumerate(choices, 1) if p == current), 1)
+    log("which provider serves the model?")
+    for i, (provider, count) in enumerate(choices, 1):
+        label = _preset_for(provider).get("label") or f"{count} model(s) in {provider}'s catalog"
+        log(f"  {i}. {provider} — {label}")
+    answer = ask("provider", default=str(default_index)).strip()
+    if answer.isdigit() and 1 <= int(answer) <= len(choices):
+        return choices[int(answer) - 1][0]
+    if not answer:
+        return current
+    return PROVIDER_ALIASES.get(answer, answer)
+
+
+def catalog_ids_for(harness: str, provider: str) -> list[str]:
+    """Catalog rows belonging to this provider, under any spelling it prints.
+
+    pi calls the local server ``llama.cpp``; factory.toml stores the alias that
+    works (``llamacpp``). Matching only one of the two makes the wizard list zero
+    models for a provider it just offered.
+    """
+    return [model for row_provider, model in harnesses.harness_catalog(harness)
+            if row_provider == provider or PROVIDER_ALIASES.get(row_provider, row_provider) == provider]
+
+
+def models_for_provider(harness: str, backend: Backend, log) -> list[str]:
+    """What this provider answers with *now*, then what the agent merely claims.
+
+    A llama.cpp server lists the GGUFs currently loaded; the agent's registry
+    lists ids that may not exist on this box. Live ids first, and the difference
+    said out loud, so a pick is never silently an unproven one.
+    """
+    listed = catalog_ids_for(harness, backend.provider)
+    preset = _preset_for(backend.provider)
+    if not preset:
+        return listed
+    probe = backend.model_copy(update={"base_url": preset["base_url"]})
+    live = harnesses.endpoint_models(probe)
+    if live:
+        extra = [m for m in listed if m not in live]
+        log(f"  [green]{len(live)} model(s) loaded on {preset['base_url']} right now[/]"
+            + (f" — {len(extra)} more named in {harness}'s registry, not served by this server"
+               if extra else ""))
+        return live + extra
+    log(f"  [yellow]{preset['base_url']}/models did not answer[/] — start the server, or pick "
+        f"another provider. {len(listed)} id(s) below come from {harness}'s registry and are "
+        "unproven until something answers")
+    return listed
 
 
 def _local_backend(base_url: str | None, model: str, provider: str = "llamacpp") -> Backend:
@@ -350,18 +427,44 @@ def run_backend(
     log(f"harness: {harness}   source: {source}" + (f" (preset: {preset_name})" if preset_name else ""))
 
     if source == "harness-login":
-        backend = Backend(provider=provider or config.backend.provider,
-                          base_url=config.backend.base_url,
-                          model=model, api_key_env=api_key_env or config.backend.api_key_env,
-                          agent_credential=True)
+        # Provider first, then only that provider's models. pi answers
+        # `--list-models` with ~950 ids over 14 providers; a flat list asks the
+        # operator to know the provider from the id and to keep the two in step
+        # by hand — which is how a freeflow model id ended up on a dead endpoint.
+        has_catalog = harness != "zcode"
+        chosen = PROVIDER_ALIASES.get(provider or config.backend.provider,
+                                      provider or config.backend.provider)
+        choices = provider_choices(harness) if has_catalog else []
+        if has_catalog and not provider and not yes and len(choices) > 1:
+            chosen = pick_provider(choices, config.backend.provider, _ask, log)
+        # zcode has no provider registry and takes no model flags (ADR-0019): the
+        # CLI serves whatever its own settings or `zcode login` define, so no
+        # preset may claim it — that would hand it a mocked key it never uses.
+        endpoint_preset = _preset_for(chosen) if has_catalog else {}
+        backend = Backend(provider=chosen,
+                          base_url=endpoint_preset.get("base_url", config.backend.base_url),
+                          model=model,
+                          api_key_env=api_key_env or endpoint_preset.get("api_key_env",
+                                                                         config.backend.api_key_env),
+                          # A provider the agent logs into needs no key on the command
+                          # line; a local endpoint needs the mocked one or it is refused.
+                          agent_credential=not endpoint_preset)
         if not (model_given or yes) and harness != "zcode":
-            catalog = harnesses.harness_models(harness)
-            backend = backend.model_copy(update={"model": pick_model(catalog, backend.model, _ask, log)})
+            backend = backend.model_copy(update={
+                "model": pick_model(models_for_provider(harness, backend, log), backend.model, _ask, log)})
         # zcode: no model question — there is no catalog to offer and no flag to
         # send it to; the id recorded in factory.toml is bookkeeping only.
+        if endpoint_preset:
+            # A preset provider is an endpoint, and an endpoint reaches the agent
+            # only through its registry block: pi's built-in ``llama.cpp`` takes no
+            # URL and waits silently when nothing answers.
+            harnesses.register_provider(harness, backend, log)
         ready, detail = harnesses.check_auth(harness, backend)
         unmanaged = "provider_not_found" in detail
-        if ready and not login:
+        if endpoint_preset and not login:
+            log(f"  {chosen} is served at {backend.base_url} — nothing to log into; "
+                "the endpoint itself is the credential")
+        elif ready and not login:
             log(f"  {harness} already has a credential for this provider — no login needed")
         elif unmanaged and not login:
             why = ("the agent's own settings serve it" if harness == "zcode"
@@ -372,8 +475,9 @@ def run_backend(
             if not ready and not unmanaged:
                 log(f"  {harness} reports: {detail}")
             _handover_login(harness, log)
-        outcome = _verify(harness, backend, log, runtime_key=False, timeout_s=verify_budget)
-        _finish(config, harness, backend, root, outcome, log, registry=False)
+        outcome = _verify(harness, backend, log, runtime_key=not backend.agent_credential,
+                          timeout_s=verify_budget)
+        _finish(config, harness, backend, root, outcome, log, registry=bool(endpoint_preset))
         return outcome
 
     if source == "openai-endpoint":
@@ -523,7 +627,13 @@ def run_model(
         log(f"  [red]{harness} not found on PATH[/] — install it first")
         return 2
 
-    listed = harnesses.endpoint_models(config.backend) or harnesses.harness_models(harness)
+    # Scoped to the provider already configured: the ids it can answer with, not
+    # every id the agent has ever heard of.
+    listed = (harnesses.endpoint_models(config.backend)
+              or catalog_ids_for(harness, config.backend.provider)
+              or harnesses.harness_models(harness))
+    log(f"  provider {config.backend.provider!r}: {len(listed)} model(s) to choose from"
+        + ("" if listed else " — nothing answered, so type the id you know it serves"))
     model_given = bool(model)
     if not model_given and not yes:
         model = pick_model(listed, config.backend.model, ask, log)

@@ -23,7 +23,15 @@ def fake_harness(monkeypatch):
     monkeypatch.setattr(harnesses, "spawn_argv", lambda name: [name])  # zcode's node/.cjs prefix
     # No test reaches the network: the endpoint catalog is a seam like the rest.
     monkeypatch.setattr(harnesses, "endpoint_models", lambda b: [])
-    monkeypatch.setattr(harnesses, "harness_models", lambda name: [])
+    # The catalog is one seam: models, providers and per-provider lists all derive
+    # from it, so stubbing the pair list keeps all three honest at once.
+    monkeypatch.setattr(harnesses, "harness_catalog", lambda name: [])
+    # `check_auth` spawns the harness as well. The neutral answer is "the agent
+    # keeps no credential for this provider" — what it says for a keyless
+    # extension, for zcode, and for a machine where nothing was logged in yet.
+    # Tests about the login handover stub this themselves.
+    monkeypatch.setattr(harnesses, "check_auth",
+                        lambda name, backend: (False, '{"reason":"provider_not_found"}'))
     # Same for the loopback probe behind the interactive source question.
     monkeypatch.setattr(backend_setup, "probe_local_endpoints", lambda: [])
     calls: list[list[str]] = []
@@ -363,6 +371,74 @@ def test_a_provider_pi_reports_unauthorized_for_still_hands_over_the_login(tmp_p
     )
 
     assert handovers == ["pi"]
+
+
+def test_the_local_server_is_offered_once_under_the_spelling_that_answers(monkeypatch):
+    """pi's table says ``llama.cpp``; the block that works says ``llamacpp``.
+
+    Two entries for one machine is how an operator ends up choosing the built-in
+    provider that takes no URL and waits silently when nothing is listening.
+    """
+    monkeypatch.setattr(harnesses, "harness_catalog", lambda name: [
+        ("llama.cpp", "bonsai-27b"), ("llama.cpp", "qwen3.5-9b"), ("freeflow", "ovh-free/gpt-oss-120b")])
+    choices = dict(backend_setup.provider_choices("pi"))
+    assert "llama.cpp" not in choices
+    assert choices["llamacpp"] == 2
+    assert next(iter(choices)) == "llamacpp"  # busiest first, and counted, not merged away
+    assert {"ollama", "qoder", "dashscope"} <= set(choices)  # every preset stays offerable
+
+
+def test_the_wizard_asks_the_provider_before_any_model_list(tmp_path, fake_harness, monkeypatch):
+    """One 950-row list answers neither question — and the freeflow id picked
+    from it landed on a dead llama.cpp endpoint."""
+    _project(tmp_path)
+    monkeypatch.setattr(harnesses, "harness_catalog", lambda name: [
+        ("llama.cpp", "bonsai-27b"), ("llama.cpp", "qwen3.5-9b"), ("freeflow", "ovh-free/gpt-oss-120b")])
+    asked: list[str] = []
+
+    def ask(text, default=None):
+        asked.append(text)
+        return {"provider": "2", "model": "1"}[text]  # freeflow, then its only model
+
+    msgs: list[str] = []
+    assert backend_setup.run_backend(tmp_path, harness="pi", source="harness-login",
+                                     log=msgs.append, ask=ask) == 0
+    assert asked == ["provider", "model"]
+    saved = load_config(tmp_path).backend
+    assert (saved.provider, saved.model, saved.agent_credential) == ("freeflow", "ovh-free/gpt-oss-120b", True)
+    assert fake_harness[-1][:4] == ["pi", "--provider", "freeflow", "--model"]
+    assert "--api-key" not in fake_harness[-1]
+
+
+def test_a_llama_choice_lists_what_the_server_serves_right_now(tmp_path, fake_harness, monkeypatch):
+    """The loaded GGUFs, not the registry's wish list — and the gap said out loud."""
+    _project(tmp_path)
+    monkeypatch.setattr(harnesses, "harness_catalog", lambda name: [
+        ("llama.cpp", "bonsai-27b"), ("llama.cpp", "qwen3.5-9b"), ("openrouter", "x/y")])
+    monkeypatch.setattr(harnesses, "endpoint_models", lambda b: ["qwen3.5-9b"])
+    msgs: list[str] = []
+    assert backend_setup.run_backend(
+        tmp_path, harness="pi", source="harness-login", provider="llama.cpp",
+        ask=_ask(["1"]), log=msgs.append) == 0
+    saved = load_config(tmp_path).backend
+    assert (saved.provider, saved.model) == ("llamacpp", "qwen3.5-9b")  # pi's spelling, factory's block
+    assert "1 model(s) loaded on http://127.0.0.1:8080/v1 right now" in " ".join(msgs)
+    assert "not served by this server" in " ".join(msgs)  # bonsai-27b is named, but not loaded
+    # the endpoint answer goes first, the registry's extra ids after it
+    shown = [m for m in msgs if m.strip().startswith("1. ")]
+    assert shown[0].strip() == "1. qwen3.5-9b"
+
+
+def test_a_down_server_is_named_instead_of_a_model_being_blamed(tmp_path, fake_harness, monkeypatch):
+    """No /models answer means nothing is listening — the ids below are unproven."""
+    _project(tmp_path)
+    monkeypatch.setattr(harnesses, "harness_catalog", lambda name: [("llama.cpp", "bonsai-27b")])
+    msgs: list[str] = []
+    backend_setup.run_backend(tmp_path, harness="pi", source="harness-login", provider="llamacpp",
+                              ask=_ask(["1"]), log=msgs.append)
+    text = " ".join(msgs)
+    assert "http://127.0.0.1:8080/v1/models did not answer" in text
+    assert "start the server" in text and "unproven" in text
 
 
 def test_the_check_line_names_the_command_but_never_the_key(tmp_path, fake_harness, monkeypatch):
