@@ -244,7 +244,7 @@ def registry_load(name: str) -> dict | None:
     except (ValueError, yaml.YAMLError):
         raise HarnessError(
             f"{path} is not valid {_REGISTRY_FILE[name][1]} — fix or remove it, then re-run "
-            "`sfactory backend` (the factory will not overwrite a file it cannot parse)."
+            "`sfactory provider` (the factory will not overwrite a file it cannot parse)."
         ) from None
     return data if isinstance(data, dict) else {}
 
@@ -453,35 +453,35 @@ def login_hint(name: str) -> str:
     if name == "zcode":
         return "`zcode login` — pick z.ai (Start plan) or BigModel; the CLI then serves its own model"
     if name == "omp":
-        return "`omp login` — pick the provider (or run `sfactory backend --login` to hand you over)"
+        return "`omp login` — pick the provider (or run `sfactory provider --login` to hand you over)"
     return "run `pi`, type `/login`, pick the provider, and use key `none` for a local llama.cpp endpoint"
 
 
 def remedy(output: str, backend: Backend, harness: str = "pi") -> str:
     """Map the harness's own error words to the next command — no log file needed.
 
-    Shared by `sfactory backend` (which proves a choice) and dispatch (which
+    Shared by `sfactory provider` (which proves a choice) and dispatch (which
     discovers the failure mid-wave): the fix for a dead agent must reach the
     operator wherever the agent was spawned from.
     """
     lowered = output.lower()
     if "no api key" in lowered or ("api key" in lowered and "not found" in lowered):
         return (f"the agent has no credential for provider {backend.provider!r}: {login_hint(harness)}"
-                " — or pass the key at runtime, which `sfactory backend` and dispatch both do now")
+                " — or pass the key at runtime, which `sfactory provider` and dispatch both do now")
     if "connect" in lowered or "econnrefused" in lowered:
         if harness == "zcode":
             return (f"{harness} cannot reach the model its own settings point at — set the "
                     "model/provider in the ZCode app settings, or `zcode login` to serve a "
                     "subscription model")
         return (f"nothing is serving {backend.base_url} — start the endpoint (llama-router / llama-server) "
-                "or point the project elsewhere with `sfactory backend --source openai-endpoint`")
+                "or point the project elsewhere with `sfactory provider --source openai-endpoint`")
     if "model" in lowered and ("not found" in lowered or "not offered" in lowered):
-        return (f"{backend.model!r} is not offered by this endpoint — `sfactory backend` lists what it "
+        return (f"{backend.model!r} is not offered by this endpoint — `sfactory provider` lists what it "
                 "does serve (note: a HF repo id is not a served model name)")
     if "timed out" in lowered:
         return (f"{backend.model!r} did not answer inside the budget — a local model spends most of it "
                 "reading the agent's system prompt, so raise [harness] worker_timeout_min or pick a "
-                "smaller/faster model with `sfactory backend --model <id>`")
+                "smaller/faster model with `sfactory model <id>`")
     return ""
 
 

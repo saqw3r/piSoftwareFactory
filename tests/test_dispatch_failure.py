@@ -49,7 +49,7 @@ def test_worker_command_matches_the_chosen_harness(monkeypatch, harness, expecte
 def test_missing_harness_names_the_switch_command(monkeypatch):
     monkeypatch.setattr(pi_agent, "installed", lambda name: False)
     monkeypatch.setattr(pi_agent, "binary", lambda name: name)
-    with pytest.raises(pi_agent.PiError, match="sfactory backend --harness omp"):
+    with pytest.raises(pi_agent.PiError, match="sfactory brain omp"):
         pi_agent._base_command(_config("pi"), "json")
 
 
@@ -210,7 +210,7 @@ def test_a_worker_that_worked_then_went_quiet_is_not_blamed_on_silence(monkeypat
     assert result.node.status == "blocked"
     assert "called bash and then streamed nothing back" in text
     assert "made no tool call" not in text
-    assert "re-run the task" in text and "sfactory backend --model" in text
+    assert "re-run the task" in text and "sfactory model" in text
 
 
 def test_clean_worker_with_an_empty_lane_is_not_done(monkeypatch, tmp_path):
@@ -244,7 +244,7 @@ def test_silent_model_is_named_instead_of_left_mystery(monkeypatch, tmp_path):
     text = "\n".join(msgs)
     assert "empty message" in text
     assert "tiny-local-model" in text
-    assert "sfactory backend --model" in text
+    assert "sfactory model" in text
 
 
 def test_refused_git_inspection_blocks_without_claiming_an_empty_lane(monkeypatch, tmp_path):

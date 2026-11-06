@@ -44,7 +44,7 @@ def test_init_scaffolds_and_commits(tmp_path, capsys):
     assert status.stdout.strip() == "", status.stdout
 
     # The machine's brain must be ignored, not merely untracked: re-pointing the
-    # model is what `sfactory backend` does, and that must not be the thing that
+    # model is what `sfactory provider` does, and that must not be the thing that
     # blocks `sfactory release`'s clean-tree gate.
     tracked = subprocess.run(("git", "-C", str(tmp_path), "ls-files", "factory.toml"),
                              capture_output=True, text=True, check=False)
@@ -128,7 +128,7 @@ def test_probe_replaces_only_a_model_nobody_serves(monkeypatch):
 
     assert config.backend.model == "only-model"
     assert any("is not served" in m for m in msgs)
-    assert any("sfactory backend --model" in m for m in msgs)
+    assert any("sfactory model" in m for m in msgs)
 
 
 def test_init_does_not_probe_a_backend_the_agent_authenticates(tmp_path, monkeypatch):

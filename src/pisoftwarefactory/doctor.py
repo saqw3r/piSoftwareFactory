@@ -71,8 +71,7 @@ def run_doctor(root: Path, log) -> int:  # pragma: no cover - interactive output
     version = _run_version((*harnesses.spawn_argv(harness), "--version")) or "missing"
     checks.append(
         Check(f"harness: {harness}", "ok" if version != "missing" else "fail", version,
-              f"`sfactory backend --harness {harness}` configures it, or switch with "
-              f"`sfactory backend --harness {others[0]}`"
+              f"install {harness}, or pick a brain that is here with `sfactory brain {others[0]}`"
               if version == "missing" else f"the other harnesses ({', '.join(others)}) are also selectable")
     )
 

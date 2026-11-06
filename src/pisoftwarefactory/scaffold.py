@@ -445,7 +445,7 @@ def _probe_backend(config: FactoryConfig, log) -> None:
             config.backend.context_window = info.context_window
         if not info.models:
             log(f"  [yellow]{config.backend.base_url} listed no models[/] — keeping "
-                f"{config.backend.model!r}; verify it with `sfactory backend --verify`")
+                f"{config.backend.model!r}; verify it with `sfactory provider --verify`")
             return
         if config.backend.model in info.models:
             log(f"  [green]probed[/] {config.backend.base_url} → {config.backend.model} is served "
@@ -453,7 +453,7 @@ def _probe_backend(config: FactoryConfig, log) -> None:
             return
         log(f"  [yellow]{config.backend.model!r} is not served by {config.backend.base_url}[/] — "
             f"switching to {info.models[0]} so this run has a brain at all. "
-            f"Pick deliberately: `sfactory backend --model <id>` ({len(info.models)} listed)")
+            f"Pick deliberately: `sfactory model <id>` ({len(info.models)} listed)")
         config.backend.model = info.models[0]
     except Exception as exc:  # noqa: BLE001
         log(f"  [yellow]backend probe failed[/] ({exc}); keeping defaults")
@@ -590,7 +590,7 @@ def run_init(target: Path, auto: bool, langs: str, force: bool, log) -> None:
     _write(root / "paperclip.company.json", Template(PAPERCLIP_COMPANY_JSON).render(**ctx), force, log)
 
     gitignore = root / ".gitignore"
-    # `factory.toml` is the machine's brain: `sfactory backend` rewrites it with
+    # `factory.toml` is the machine's brain: `sfactory provider` rewrites it with
     # whatever model this box serves. Tracked, every provisioning run would leave
     # the tree dirty and `sfactory release` would refuse it. `.env` holds the
     # endpoint key the config only names — never tracked either.

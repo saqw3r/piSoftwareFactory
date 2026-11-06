@@ -109,7 +109,7 @@ def test_a_cloud_backend_is_not_blamed_on_loading_a_local_prompt(monkeypatch):
 
 
 def test_plain_text_answers_are_echoed_too(monkeypatch):
-    """`sfactory backend` verifies with --print: the answer is not JSON."""
+    """`sfactory provider` verifies with --print: the answer is not JSON."""
     _install(monkeypatch, FakeProc(["OK\n"]))
     msgs: list[str] = []
     rc, out, _err = stream_agent(["pi"], None, 30, "pi", log=msgs.append, echo_text=True)

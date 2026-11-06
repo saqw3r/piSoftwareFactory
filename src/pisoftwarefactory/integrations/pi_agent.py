@@ -224,7 +224,7 @@ def _base_command(config: FactoryConfig, mode: str) -> list[str]:
         others = [h for h in HARNESSES if h != name]
         other = next((h for h in others if installed(h)), others[0])
         raise PiError(
-            f"{name} not found on PATH — install it, or switch with `sfactory backend --harness {other}`"
+            f"{name} not found on PATH — install it, or switch with `sfactory brain {other}`"
         )
     cmd = [binary(name), "--no-session"]
     if name == "omp":
@@ -316,7 +316,7 @@ def stream_agent(cmd: list[str], cwd: Path | None, timeout_s: int, model: str,
                  quiet_note: str = "") -> tuple[int, str, str]:
     """Run an agent command, echoing progress as events land; returns (rc, stdout, stderr).
 
-    Shared with `sfactory backend`, which asks the agent one question and must
+    Shared with `sfactory provider`, which asks the agent one question and must
     not look like it hung while a local GGUF loads — there, the answer is plain
     text, so ``echo_text`` passes every line through instead of only the JSON
     ones. Both pipes are drained on their own threads: pi writes warnings to

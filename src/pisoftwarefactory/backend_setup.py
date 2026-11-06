@@ -1,10 +1,12 @@
-"""``sfactory backend`` — choose the brain, then prove it answers (ADR-0017).
+"""``sfactory provider`` — choose where the model comes from, then prove it answers.
 
-One command decides two things: which coding agent does the work (``pi`` or
-``omp``) and where its model comes from — the owner's local llama.cpp, an
-OpenAI-compatible endpoint behind a key, or a subscription provider the agent
-logs into itself. Every branch ends with a real one-shot prompt through the
-chosen agent, so "configured" means "answered", not "the file says so".
+The command answers one question: which provider serves the model — the owner's
+local llama.cpp, an OpenAI-compatible endpoint behind a key, or a subscription
+provider the agent logs into itself. Which coding agent does the work is a
+separate command (`sfactory brain`, ADR-0022), though ``--harness`` still lets a
+single call set both for a machine nobody has configured yet. Every branch ends
+with a real one-shot prompt through the chosen agent, so "configured" means
+"answered", not "the file says so".
 
 Nothing here asks the user to edit a file, and no secret is stored in
 ``factory.toml``: the key lives in the environment (``api_key_env``) and is
@@ -322,7 +324,7 @@ def _show(config: FactoryConfig, root: Path, harness: str, log) -> int:
         key = f"${b.api_key_env} ({'set' if os.environ.get(b.api_key_env) else 'not set'})"
     else:
         key = "mocked (none)"
-    log(f"brain: {harness} · {b.provider} · {b.base_url} · {b.model} · key: {key}")
+    log(f"brain: {harness} · provider: {b.provider} · {b.base_url} · {b.model} · key: {key}")
     preset = next((n for n, p in PRESETS.items() if p["base_url"] == b.base_url), "")
     if preset:
         log(f"  matches preset {preset!r}")
@@ -336,7 +338,7 @@ def _show(config: FactoryConfig, root: Path, harness: str, log) -> int:
     data = harnesses.registry_load(harness)
     stored = ((data or {}).get("providers") or {}).get(b.provider)
     if stored is None:
-        log(f"  [yellow]registry[/] {path}: no provider {b.provider!r} — `sfactory backend` writes it")
+        log(f"  [yellow]registry[/] {path}: no provider {b.provider!r} — `sfactory provider` writes it")
         return 1
     block = harnesses.provider_block(b)
     drift = [f"{k}: registry {stored.get(k)!r} vs factory.toml {block.get(k)!r}"
@@ -348,7 +350,7 @@ def _show(config: FactoryConfig, root: Path, harness: str, log) -> int:
         log(f"  [red]registry drift[/] {path}")
         for d in drift:
             log(f"    {d}")
-        log("  fix: `sfactory backend` re-registers the provider (the file is backed up first)")
+        log("  fix: `sfactory provider` re-registers the provider (the file is backed up first)")
         return 1
     log(f"  [green]registry in sync[/] {path}")
     return 0
@@ -721,16 +723,16 @@ def _reproducible(harness: str, backend: Backend) -> str:
     honest about the URL they stand for.
     """
     if backend.agent_credential:
-        parts = ["sfactory backend", "--harness", harness, "--source", "harness-login",
+        parts = ["sfactory provider", "--harness", harness, "--source", "harness-login",
                  "--provider", backend.provider, "--model", backend.model]
     elif backend.api_key_env:
-        parts = ["sfactory backend", "--harness", harness, "--source", "openai-endpoint",
+        parts = ["sfactory provider", "--harness", harness, "--source", "openai-endpoint",
                  "--base-url", backend.base_url, "--api-key-env", backend.api_key_env,
                  "--model", backend.model]
         if backend.provider not in ("openai", "openai-compatible"):
             parts.append(f"--provider {backend.provider}")
     else:
-        parts = ["sfactory backend", "--harness", harness, "--source", "llama-local",
+        parts = ["sfactory provider", "--harness", harness, "--source", "llama-local",
                  "--base-url", backend.base_url, "--model", backend.model]
     return " ".join(parts) + " -y"
 

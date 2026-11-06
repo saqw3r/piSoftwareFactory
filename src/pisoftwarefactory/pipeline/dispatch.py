@@ -147,12 +147,12 @@ def _why_nothing_changed(run: PiRun, config: FactoryConfig, log) -> None:
             "back[/] — every later retry answered empty")
         log(f"    the lane holds no file and no commit, so nothing was delivered — re-run the "
             f"task ({config.harness.name} + {config.backend.model} may answer next time), or "
-            "pick a model that finishes: `sfactory backend --model <id>`")
+            "pick a model that finishes: `sfactory model <id>`")
         return
     if not text:
         log(f"    [yellow]{config.harness.name} streamed no text and made no tool call[/] — "
             f"{config.backend.model!r} answered with an empty message")
-        log("    that model cannot do the task. Pick one that can: `sfactory backend --model <id>`")
+        log("    that model cannot do the task. Pick one that can: `sfactory model <id>`")
         return
     log("    what the agent said instead of changing the lane:")
     for line in text.splitlines()[-8:]:
