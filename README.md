@@ -186,8 +186,13 @@ sfactory backend --source harness-login --login   # subscription: hands you the 
 Sources: `llama-local` (your endpoint, mocked key — the default),
 `openai-endpoint` (URL + key from the environment; the secret never lands in
 `factory.toml`), `harness-login` (a provider the agent authenticates to itself).
-The model list comes from the live endpoint first, so you pick from what actually
-answers; if the endpoint is silent, the agent's own catalog is used.
+Run bare, `harness-login` asks **which provider** first (busiest first, with the
+model count it can name), then lists only that provider's models — `pi
+--list-models` answers with ~950 ids over 14 providers, and one flat list lets
+you pick a freeflow id onto a dead endpoint. A llama choice lists what the
+server answers on `/v1/models` **right now** and says so; ids that only the
+agent's registry names are offered after them, marked unproven. If nothing
+listens, the wizard says which port did not answer instead of blaming a model.
 
 The key can live in a gitignored `.env` next to `factory.toml` — every command
 loads it, and it survives the shell that wrote it. When the env var is unset,
