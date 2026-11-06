@@ -71,6 +71,7 @@ def test_update_stub_answers_during_the_replace_gap(monkeypatch, tmp_path):
     assert stub is not None and stub.name == "sfactory.cmd"
     text = stub.read_text(encoding="ascii")
     assert "update in progress" in text and "0.2.0" in text and "exit /b 75" in text
+    assert "If this message persists" in text and "--reinstall" in text  # repair hint
 
 
 def test_scheduled_helper_removes_the_stub_after_reinstall(monkeypatch, tmp_path):
@@ -86,4 +87,10 @@ def test_scheduled_helper_removes_the_stub_after_reinstall(monkeypatch, tmp_path
 
     monkeypatch.setattr(selfupdate.subprocess, "Popen", FakePopen)
     selfupdate._schedule_after_exit("uv", str(tmp_path / "src"), tmp_path / "log", stub)
-    assert "Remove-Item" in captured["ps"] and "sfactory.cmd" in captured["ps"]
+    ps = captured["ps"]
+    # the shim is removed BEFORE uv starts (a present-but-broken shim answers
+    # with a raw ModuleNotFoundError), and the stub is cleaned only on success
+    assert ps.index("sfactory.exe") < ps.index("Start-Process")
+    assert "--reinstall" in ps and "-PassThru" in ps
+    assert "sfactory.cmd" in ps and "ExitCode -eq 0" in ps
+    assert "update FAILED" in ps  # failure rewrites the stub with the repair command

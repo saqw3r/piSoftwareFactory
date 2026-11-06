@@ -87,7 +87,10 @@ def _write_update_stub(version: str) -> Path | None:
         stub.parent.mkdir(parents=True, exist_ok=True)
         stub.write_text(
             f"@echo sfactory update in progress (installing {version}) - the command "
-            "returns in a few seconds, please retry.\n@exit /b 75\n",
+            "returns in a few seconds, please retry.\n"
+            "@echo If this message persists, repair with:\n"
+            "@echo   uv tool install --force --reinstall <path to the sfactory source>\n"
+            "@exit /b 75\n",
             encoding="ascii",
         )
         return stub
@@ -102,16 +105,31 @@ def _schedule_after_exit(uv: str, source: str, log_file: Path, stub: Path | None
     uv logs progress to stderr, and piping stderr through PowerShell turns
     every informational line into a scary NativeCommandError record.
     """
+    # Remove the shims before uv starts: uv tears the old env down first, and a
+    # present-but-broken shim answers with a raw ModuleNotFoundError traceback.
+    # The stub then owns the whole window; it is deleted only on success, and a
+    # failed reinstall rewrites it with the repair command instead.
+    shims = ""
+    if stub is not None:
+        exe = _ps_quote(str(stub.with_suffix(".exe")))
+        bash_shim = _ps_quote(str(stub.with_suffix("")))
+        shims = f"Remove-Item -Force -ErrorAction SilentlyContinue '{exe}','{bash_shim}'; "
     ps = (
         f"Wait-Process -Id {os.getpid()} -Timeout 60 -ErrorAction SilentlyContinue; "
-        f"Start-Process -FilePath '{_ps_quote(uv)}' "
+        f"{shims}"
+        f"$p = Start-Process -FilePath '{_ps_quote(uv)}' "
         f"-ArgumentList 'tool','install','--force','--reinstall','{_ps_quote(source)}' "
-        f"-NoNewWindow -Wait "
+        f"-NoNewWindow -Wait -PassThru "
         f"-RedirectStandardOutput '{_ps_quote(str(log_file))}.out' "
-        f"-RedirectStandardError '{_ps_quote(str(log_file))}'"
+        f"-RedirectStandardError '{_ps_quote(str(log_file))}'; "
     )
     if stub is not None:
-        ps += f"; Remove-Item -Force -ErrorAction SilentlyContinue '{_ps_quote(str(stub))}'"
+        ps += (
+            f"if ($p.ExitCode -eq 0) {{ Remove-Item -Force -ErrorAction SilentlyContinue "
+            f"'{_ps_quote(str(stub))}' }} else {{ Set-Content -Path '{_ps_quote(str(stub))}' "
+            f"-Value 'sfactory update FAILED (exit ' + $p.ExitCode + ') - repair with: "
+            f"uv tool install --force --reinstall {_ps_quote(source)}' }}"
+        )
     subprocess.Popen(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
         stdout=subprocess.DEVNULL,
